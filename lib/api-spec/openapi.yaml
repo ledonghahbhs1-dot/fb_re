@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: bot
+    description: Facebook Bot operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,138 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /bot/status:
+    get:
+      operationId: getBotStatus
+      tags: [bot]
+      summary: Get bot status
+      description: Returns current bot status and stats
+      responses:
+        "200":
+          description: Bot status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStatus"
+
+  /bot/start:
+    post:
+      operationId: startBot
+      tags: [bot]
+      summary: Start the bot
+      description: Login to Facebook and start listening for messages
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartBotBody"
+      responses:
+        "200":
+          description: Bot started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /bot/stop:
+    post:
+      operationId: stopBot
+      tags: [bot]
+      summary: Stop the bot
+      description: Logout from Facebook and stop the bot
+      responses:
+        "200":
+          description: Bot stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /bot/settings:
+    put:
+      operationId: updateBotSettings
+      tags: [bot]
+      summary: Update bot settings
+      description: Update system prompt and auto-reply settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BotSettingsBody"
+      responses:
+        "200":
+          description: Settings updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotSettingsResponse"
+
+  /bot/clear-conversation:
+    post:
+      operationId: clearConversation
+      tags: [bot]
+      summary: Clear conversation history
+      description: Clear the Claude conversation history for a thread
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClearConversationBody"
+      responses:
+        "200":
+          description: Conversation cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /bot/ignore-thread:
+    post:
+      operationId: setIgnoreThread
+      tags: [bot]
+      summary: Ignore or unignore a thread
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IgnoreThreadBody"
+      responses:
+        "200":
+          description: Thread updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IgnoreThreadResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +168,110 @@ components:
       required:
         - status
 
+    BotStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [stopped, connecting, running, error]
+        error:
+          type: string
+          nullable: true
+        startedAt:
+          type: string
+          nullable: true
+        messagesHandled:
+          type: integer
+        autoReplyEnabled:
+          type: boolean
+        systemPrompt:
+          type: string
+      required:
+        - status
+        - error
+        - startedAt
+        - messagesHandled
+        - autoReplyEnabled
+        - systemPrompt
+
+    StartBotBody:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+      required:
+        - email
+        - password
+
+    BotSettingsBody:
+      type: object
+      properties:
+        systemPrompt:
+          type: string
+        autoReplyEnabled:
+          type: boolean
+
+    BotSettingsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        systemPrompt:
+          type: string
+        autoReplyEnabled:
+          type: boolean
+      required:
+        - success
+        - systemPrompt
+        - autoReplyEnabled
+
+    ClearConversationBody:
+      type: object
+      properties:
+        threadId:
+          type: string
+      required:
+        - threadId
+
+    IgnoreThreadBody:
+      type: object
+      properties:
+        threadId:
+          type: string
+        ignore:
+          type: boolean
+      required:
+        - threadId
+
+    IgnoreThreadResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        ignoredThreadIds:
+          type: array
+          items:
+            type: string
+      required:
+        - success
+        - ignoredThreadIds
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required:
+        - success
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error

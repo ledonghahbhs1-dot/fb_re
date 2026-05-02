@@ -5,18 +5,32 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
+  MutationFunction,
   QueryFunction,
   QueryKey,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
 
-import type { HealthStatus } from "./api.schemas";
+import type {
+  BotSettingsBody,
+  BotSettingsResponse,
+  BotStatus,
+  ClearConversationBody,
+  ErrorResponse,
+  HealthStatus,
+  IgnoreThreadBody,
+  IgnoreThreadResponse,
+  StartBotBody,
+  SuccessResponse,
+} from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
-import type { ErrorType } from "../custom-fetch";
+import type { ErrorType, BodyType } from "../custom-fetch";
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -99,3 +113,508 @@ export function useHealthCheck<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * Returns current bot status and stats
+ * @summary Get bot status
+ */
+export const getGetBotStatusUrl = () => {
+  return `/api/bot/status`;
+};
+
+export const getBotStatus = async (
+  options?: RequestInit,
+): Promise<BotStatus> => {
+  return customFetch<BotStatus>(getGetBotStatusUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetBotStatusQueryKey = () => {
+  return [`/api/bot/status`] as const;
+};
+
+export const getGetBotStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof getBotStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBotStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetBotStatusQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getBotStatus>>> = ({
+    signal,
+  }) => getBotStatus({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getBotStatus>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetBotStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getBotStatus>>
+>;
+export type GetBotStatusQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get bot status
+ */
+
+export function useGetBotStatus<
+  TData = Awaited<ReturnType<typeof getBotStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBotStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetBotStatusQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Login to Facebook and start listening for messages
+ * @summary Start the bot
+ */
+export const getStartBotUrl = () => {
+  return `/api/bot/start`;
+};
+
+export const startBot = async (
+  startBotBody: StartBotBody,
+  options?: RequestInit,
+): Promise<SuccessResponse> => {
+  return customFetch<SuccessResponse>(getStartBotUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(startBotBody),
+  });
+};
+
+export const getStartBotMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startBot>>,
+    TError,
+    { data: BodyType<StartBotBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof startBot>>,
+  TError,
+  { data: BodyType<StartBotBody> },
+  TContext
+> => {
+  const mutationKey = ["startBot"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof startBot>>,
+    { data: BodyType<StartBotBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return startBot(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type StartBotMutationResult = NonNullable<
+  Awaited<ReturnType<typeof startBot>>
+>;
+export type StartBotMutationBody = BodyType<StartBotBody>;
+export type StartBotMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Start the bot
+ */
+export const useStartBot = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startBot>>,
+    TError,
+    { data: BodyType<StartBotBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof startBot>>,
+  TError,
+  { data: BodyType<StartBotBody> },
+  TContext
+> => {
+  return useMutation(getStartBotMutationOptions(options));
+};
+
+/**
+ * Logout from Facebook and stop the bot
+ * @summary Stop the bot
+ */
+export const getStopBotUrl = () => {
+  return `/api/bot/stop`;
+};
+
+export const stopBot = async (
+  options?: RequestInit,
+): Promise<SuccessResponse> => {
+  return customFetch<SuccessResponse>(getStopBotUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getStopBotMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof stopBot>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof stopBot>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["stopBot"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof stopBot>>,
+    void
+  > = () => {
+    return stopBot(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type StopBotMutationResult = NonNullable<
+  Awaited<ReturnType<typeof stopBot>>
+>;
+
+export type StopBotMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Stop the bot
+ */
+export const useStopBot = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof stopBot>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof stopBot>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getStopBotMutationOptions(options));
+};
+
+/**
+ * Update system prompt and auto-reply settings
+ * @summary Update bot settings
+ */
+export const getUpdateBotSettingsUrl = () => {
+  return `/api/bot/settings`;
+};
+
+export const updateBotSettings = async (
+  botSettingsBody: BotSettingsBody,
+  options?: RequestInit,
+): Promise<BotSettingsResponse> => {
+  return customFetch<BotSettingsResponse>(getUpdateBotSettingsUrl(), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(botSettingsBody),
+  });
+};
+
+export const getUpdateBotSettingsMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateBotSettings>>,
+    TError,
+    { data: BodyType<BotSettingsBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateBotSettings>>,
+  TError,
+  { data: BodyType<BotSettingsBody> },
+  TContext
+> => {
+  const mutationKey = ["updateBotSettings"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateBotSettings>>,
+    { data: BodyType<BotSettingsBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return updateBotSettings(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateBotSettingsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateBotSettings>>
+>;
+export type UpdateBotSettingsMutationBody = BodyType<BotSettingsBody>;
+export type UpdateBotSettingsMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Update bot settings
+ */
+export const useUpdateBotSettings = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateBotSettings>>,
+    TError,
+    { data: BodyType<BotSettingsBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateBotSettings>>,
+  TError,
+  { data: BodyType<BotSettingsBody> },
+  TContext
+> => {
+  return useMutation(getUpdateBotSettingsMutationOptions(options));
+};
+
+/**
+ * Clear the Claude conversation history for a thread
+ * @summary Clear conversation history
+ */
+export const getClearConversationUrl = () => {
+  return `/api/bot/clear-conversation`;
+};
+
+export const clearConversation = async (
+  clearConversationBody: ClearConversationBody,
+  options?: RequestInit,
+): Promise<SuccessResponse> => {
+  return customFetch<SuccessResponse>(getClearConversationUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(clearConversationBody),
+  });
+};
+
+export const getClearConversationMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof clearConversation>>,
+    TError,
+    { data: BodyType<ClearConversationBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof clearConversation>>,
+  TError,
+  { data: BodyType<ClearConversationBody> },
+  TContext
+> => {
+  const mutationKey = ["clearConversation"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof clearConversation>>,
+    { data: BodyType<ClearConversationBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return clearConversation(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ClearConversationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof clearConversation>>
+>;
+export type ClearConversationMutationBody = BodyType<ClearConversationBody>;
+export type ClearConversationMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Clear conversation history
+ */
+export const useClearConversation = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof clearConversation>>,
+    TError,
+    { data: BodyType<ClearConversationBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof clearConversation>>,
+  TError,
+  { data: BodyType<ClearConversationBody> },
+  TContext
+> => {
+  return useMutation(getClearConversationMutationOptions(options));
+};
+
+/**
+ * @summary Ignore or unignore a thread
+ */
+export const getSetIgnoreThreadUrl = () => {
+  return `/api/bot/ignore-thread`;
+};
+
+export const setIgnoreThread = async (
+  ignoreThreadBody: IgnoreThreadBody,
+  options?: RequestInit,
+): Promise<IgnoreThreadResponse> => {
+  return customFetch<IgnoreThreadResponse>(getSetIgnoreThreadUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(ignoreThreadBody),
+  });
+};
+
+export const getSetIgnoreThreadMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setIgnoreThread>>,
+    TError,
+    { data: BodyType<IgnoreThreadBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setIgnoreThread>>,
+  TError,
+  { data: BodyType<IgnoreThreadBody> },
+  TContext
+> => {
+  const mutationKey = ["setIgnoreThread"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setIgnoreThread>>,
+    { data: BodyType<IgnoreThreadBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return setIgnoreThread(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetIgnoreThreadMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setIgnoreThread>>
+>;
+export type SetIgnoreThreadMutationBody = BodyType<IgnoreThreadBody>;
+export type SetIgnoreThreadMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Ignore or unignore a thread
+ */
+export const useSetIgnoreThread = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setIgnoreThread>>,
+    TError,
+    { data: BodyType<IgnoreThreadBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof setIgnoreThread>>,
+  TError,
+  { data: BodyType<IgnoreThreadBody> },
+  TContext
+> => {
+  return useMutation(getSetIgnoreThreadMutationOptions(options));
+};

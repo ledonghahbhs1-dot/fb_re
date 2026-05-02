@@ -14,3 +14,80 @@ import * as zod from "zod";
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
 });
+
+/**
+ * Returns current bot status and stats
+ * @summary Get bot status
+ */
+export const GetBotStatusResponse = zod.object({
+  status: zod.enum(["stopped", "connecting", "running", "error"]),
+  error: zod.string().nullable(),
+  startedAt: zod.string().nullable(),
+  messagesHandled: zod.number(),
+  autoReplyEnabled: zod.boolean(),
+  systemPrompt: zod.string(),
+});
+
+/**
+ * Login to Facebook and start listening for messages
+ * @summary Start the bot
+ */
+export const StartBotBody = zod.object({
+  email: zod.string(),
+  password: zod.string(),
+});
+
+export const StartBotResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
+ * Logout from Facebook and stop the bot
+ * @summary Stop the bot
+ */
+export const StopBotResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
+ * Update system prompt and auto-reply settings
+ * @summary Update bot settings
+ */
+export const UpdateBotSettingsBody = zod.object({
+  systemPrompt: zod.string().optional(),
+  autoReplyEnabled: zod.boolean().optional(),
+});
+
+export const UpdateBotSettingsResponse = zod.object({
+  success: zod.boolean(),
+  systemPrompt: zod.string(),
+  autoReplyEnabled: zod.boolean(),
+});
+
+/**
+ * Clear the Claude conversation history for a thread
+ * @summary Clear conversation history
+ */
+export const ClearConversationBody = zod.object({
+  threadId: zod.string(),
+});
+
+export const ClearConversationResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
+ * @summary Ignore or unignore a thread
+ */
+export const SetIgnoreThreadBody = zod.object({
+  threadId: zod.string(),
+  ignore: zod.boolean().optional(),
+});
+
+export const SetIgnoreThreadResponse = zod.object({
+  success: zod.boolean(),
+  ignoredThreadIds: zod.array(zod.string()),
+});

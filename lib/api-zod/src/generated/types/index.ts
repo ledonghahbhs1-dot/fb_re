@@ -6,4 +6,14 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from "./botSettingsBody";
+export * from "./botSettingsResponse";
+export * from "./botStatus";
+export * from "./botStatusStatus";
+export * from "./clearConversationBody";
+export * from "./errorResponse";
 export * from "./healthStatus";
+export * from "./ignoreThreadBody";
+export * from "./ignoreThreadResponse";
+export * from "./startBotBody";
+export * from "./successResponse";

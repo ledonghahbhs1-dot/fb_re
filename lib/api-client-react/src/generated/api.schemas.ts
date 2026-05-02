@@ -8,3 +8,61 @@
 export interface HealthStatus {
   status: string;
 }
+
+export type BotStatusStatus =
+  (typeof BotStatusStatus)[keyof typeof BotStatusStatus];
+
+export const BotStatusStatus = {
+  stopped: "stopped",
+  connecting: "connecting",
+  running: "running",
+  error: "error",
+} as const;
+
+export interface BotStatus {
+  status: BotStatusStatus;
+  error: string | null;
+  startedAt: string | null;
+  messagesHandled: number;
+  autoReplyEnabled: boolean;
+  systemPrompt: string;
+}
+
+export interface StartBotBody {
+  email: string;
+  password: string;
+}
+
+export interface BotSettingsBody {
+  systemPrompt?: string;
+  autoReplyEnabled?: boolean;
+}
+
+export interface BotSettingsResponse {
+  success: boolean;
+  systemPrompt: string;
+  autoReplyEnabled: boolean;
+}
+
+export interface ClearConversationBody {
+  threadId: string;
+}
+
+export interface IgnoreThreadBody {
+  threadId: string;
+  ignore?: boolean;
+}
+
+export interface IgnoreThreadResponse {
+  success: boolean;
+  ignoredThreadIds: string[];
+}
+
+export interface SuccessResponse {
+  success: boolean;
+  message?: string;
+}
+
+export interface ErrorResponse {
+  error: string;
+}
