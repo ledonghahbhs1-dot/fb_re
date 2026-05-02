@@ -18,8 +18,11 @@ import {
   Settings2,
   Lock,
   RefreshCcw,
-  CheckCircle2,
-  XCircle
+  KeyRound,
+  Cookie,
+  Info,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -34,6 +37,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 
+type LoginTab = "appstate" | "credentials";
+
 export default function Dashboard() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -46,10 +51,12 @@ export default function Dashboard() {
   const stopBot = useStopBot();
   const updateSettings = useUpdateBotSettings();
 
+  const [loginTab, setLoginTab] = useState<LoginTab>("appstate");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [appState, setAppState] = useState("");
+  const [showGuide, setShowGuide] = useState(false);
   
-  // Local state for auto-save
   const [prompt, setPrompt] = useState("");
   const promptInitialized = useRef(false);
   
@@ -60,21 +67,34 @@ export default function Dashboard() {
     }
   }, [botStatus]);
 
-  const handleStart = (e: React.FormEvent) => {
+  const handleStartCredentials = (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) return;
-    
     startBot.mutate({ data: { email, password } }, {
       onSuccess: () => {
-        toast({ title: "Connecting to Facebook..." });
+        toast({ title: "Đang kết nối Facebook..." });
         queryClient.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
       },
-      onError: (err) => {
-        toast({ 
-          title: "Failed to start", 
-          description: err.error || "Unknown error occurred",
-          variant: "destructive"
-        });
+      onError: (err: any) => {
+        const msg = err?.response?.data?.error || err?.message || "Không thể đăng nhập";
+        toast({ title: "Lỗi đăng nhập", description: msg, variant: "destructive" });
+        queryClient.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
+      }
+    });
+  };
+
+  const handleStartAppState = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!appState.trim()) return;
+    startBot.mutate({ data: { appState: appState.trim() } as any }, {
+      onSuccess: () => {
+        toast({ title: "Đang kết nối Facebook qua AppState..." });
+        queryClient.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
+      },
+      onError: (err: any) => {
+        const msg = err?.response?.data?.error || err?.message || "AppState không hợp lệ";
+        toast({ title: "Lỗi kết nối", description: msg, variant: "destructive" });
+        queryClient.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
       }
     });
   };
@@ -82,7 +102,7 @@ export default function Dashboard() {
   const handleStop = () => {
     stopBot.mutate(undefined, {
       onSuccess: () => {
-        toast({ title: "Bot stopped successfully" });
+        toast({ title: "Bot đã dừng" });
         queryClient.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
       }
     });
@@ -92,7 +112,7 @@ export default function Dashboard() {
     updateSettings.mutate({ data: { autoReplyEnabled: checked } }, {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
-        toast({ title: checked ? "Auto-reply enabled" : "Auto-reply disabled" });
+        toast({ title: checked ? "Bật tự động trả lời" : "Tắt tự động trả lời" });
       }
     });
   };
@@ -101,7 +121,7 @@ export default function Dashboard() {
     updateSettings.mutate({ data: { systemPrompt: prompt } }, {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
-        toast({ title: "System prompt updated" });
+        toast({ title: "Đã lưu system prompt" });
       }
     });
   };
@@ -130,7 +150,6 @@ export default function Dashboard() {
           <h1 className="text-3xl font-bold tracking-tight">System Status</h1>
           <p className="text-muted-foreground mt-1">Monitor and control your AI auto-reply agent.</p>
         </div>
-        
         <div className="flex items-center gap-3 bg-card border border-border/50 px-4 py-2 rounded-full shadow-sm">
           <Activity className="w-4 h-4 text-muted-foreground" />
           <span className="text-sm font-medium">Status:</span>
@@ -144,8 +163,13 @@ export default function Dashboard() {
       {hasError && botStatus?.error && (
         <Alert variant="destructive" className="bg-destructive/10 border-destructive/20 text-destructive">
           <AlertCircle className="h-4 w-4" />
-          <AlertTitle>System Error</AlertTitle>
-          <AlertDescription>{botStatus.error}</AlertDescription>
+          <AlertTitle>Lỗi kết nối</AlertTitle>
+          <AlertDescription className="mt-1">
+            <span className="font-mono text-xs block mb-2">{botStatus.error}</span>
+            <span className="text-xs opacity-80">
+              Gợi ý: Facebook thường chặn đăng nhập từ IP mới. Hãy thử dùng <strong>App State (cookies)</strong> thay vì email/password.
+            </span>
+          </AlertDescription>
         </Alert>
       )}
 
@@ -158,48 +182,153 @@ export default function Dashboard() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Lock className="w-5 h-5 text-primary" />
-                Connection
+                Kết nối Facebook
               </CardTitle>
-              <CardDescription>Link your Facebook account</CardDescription>
+              <CardDescription>Chọn phương thức đăng nhập</CardDescription>
             </CardHeader>
             <CardContent>
               {isStopped || hasError ? (
-                <form onSubmit={handleStart} className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="email">Email</Label>
-                    <Input 
-                      id="email" 
-                      type="email" 
-                      placeholder="account@example.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      required
-                      className="bg-background/50"
-                    />
+                <div className="w-full">
+                  {/* Custom tab buttons */}
+                  <div className="flex rounded-lg bg-background/60 border border-border/40 p-1 mb-4 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setLoginTab("appstate")}
+                      data-testid="tab-appstate"
+                      className={`flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 px-2 rounded-md font-medium transition-all ${
+                        loginTab === "appstate"
+                          ? "bg-primary text-primary-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      <Cookie className="w-3.5 h-3.5" />
+                      App State
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLoginTab("credentials")}
+                      data-testid="tab-credentials"
+                      className={`flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 px-2 rounded-md font-medium transition-all ${
+                        loginTab === "credentials"
+                          ? "bg-primary text-primary-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      <KeyRound className="w-3.5 h-3.5" />
+                      Email/Pass
+                    </button>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="password">Password</Label>
-                    <Input 
-                      id="password" 
-                      type="password" 
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      required
-                      className="bg-background/50"
-                    />
-                  </div>
-                  <Button 
-                    type="submit" 
-                    className="w-full" 
-                    disabled={startBot.isPending}
-                  >
-                    {startBot.isPending ? (
-                      <><RefreshCcw className="w-4 h-4 mr-2 animate-spin" /> Starting...</>
-                    ) : (
-                      <><Play className="w-4 h-4 mr-2" /> Start Bot</>
-                    )}
-                  </Button>
-                </form>
+
+                  {/* APP STATE PANEL */}
+                  {loginTab === "appstate" && (
+                    <form onSubmit={handleStartAppState} className="space-y-4">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <Label htmlFor="appstate-input">App State (JSON)</Label>
+                          <button
+                            type="button"
+                            onClick={() => setShowGuide(!showGuide)}
+                            className="flex items-center gap-1 text-xs text-primary hover:underline"
+                          >
+                            <Info className="w-3 h-3" />
+                            Cách lấy?
+                            {showGuide ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                          </button>
+                        </div>
+
+                        {showGuide && (
+                          <div className="bg-muted/40 border border-border/50 rounded-md p-3 text-xs space-y-2 text-muted-foreground">
+                            <p className="font-semibold text-foreground">Cách lấy App State:</p>
+                            <ol className="list-decimal list-inside space-y-1.5 leading-relaxed">
+                              <li>Đăng nhập <strong>facebook.com</strong> trên Chrome/Firefox</li>
+                              <li>Cài extension <strong>"c3c-ufc-appstate"</strong> trên Chrome Web Store</li>
+                              <li>Nhấn icon extension khi đang ở trang facebook.com</li>
+                              <li>Nhấn <strong>"Get AppState"</strong> rồi Copy JSON</li>
+                              <li>Paste vào ô bên dưới</li>
+                            </ol>
+                            <p className="text-amber-400/80 pt-1">
+                              App State ổn định hơn nhiều so với email/password. Facebook ít phát hiện bot hơn.
+                            </p>
+                          </div>
+                        )}
+
+                        <Textarea
+                          id="appstate-input"
+                          data-testid="input-appstate"
+                          placeholder={'[{"key":"c_user","value":"...","domain":".facebook.com",...},...]'}
+                          value={appState}
+                          onChange={(e) => setAppState(e.target.value)}
+                          required
+                          className="font-mono text-xs min-h-[120px] bg-background/50 resize-none"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Khuyến nghị: dùng App State thay vì email/password.
+                        </p>
+                      </div>
+                      <Button
+                        type="submit"
+                        className="w-full"
+                        disabled={startBot.isPending || !appState.trim()}
+                        data-testid="button-start-appstate"
+                      >
+                        {startBot.isPending ? (
+                          <><RefreshCcw className="w-4 h-4 mr-2 animate-spin" /> Đang kết nối...</>
+                        ) : (
+                          <><Play className="w-4 h-4 mr-2" /> Khởi động Bot</>
+                        )}
+                      </Button>
+                    </form>
+                  )}
+
+                  {/* CREDENTIALS PANEL */}
+                  {loginTab === "credentials" && (
+                    <form onSubmit={handleStartCredentials} className="space-y-4">
+                      <Alert className="bg-amber-500/10 border-amber-500/30 text-amber-400 py-2 px-3">
+                        <AlertCircle className="h-3.5 w-3.5" />
+                        <AlertDescription className="text-xs ml-1">
+                          Facebook thường chặn IP lạ. Nếu bị lỗi, hãy dùng <strong>App State</strong>.
+                        </AlertDescription>
+                      </Alert>
+                      <div className="space-y-2">
+                        <Label htmlFor="email">Email Facebook</Label>
+                        <Input
+                          id="email"
+                          type="email"
+                          placeholder="account@example.com"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          required
+                          className="bg-background/50"
+                          data-testid="input-email"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="password">Mật khẩu</Label>
+                        <Input
+                          id="password"
+                          type="password"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          required
+                          className="bg-background/50"
+                          data-testid="input-password"
+                        />
+                      </div>
+                      <Button
+                        type="submit"
+                        className="w-full"
+                        disabled={startBot.isPending}
+                        data-testid="button-start-credentials"
+                      >
+                        {startBot.isPending ? (
+                          <><RefreshCcw className="w-4 h-4 mr-2 animate-spin" /> Đang kết nối...</>
+                        ) : (
+                          <><Play className="w-4 h-4 mr-2" /> Khởi động Bot</>
+                        )}
+                      </Button>
+                    </form>
+                  )}
+                </div>
               ) : (
                 <div className="flex flex-col items-center justify-center py-6 text-center space-y-4">
                   <div className="w-16 h-16 rounded-full bg-emerald-500/10 flex items-center justify-center mb-2 relative">
@@ -209,19 +338,20 @@ export default function Dashboard() {
                     <Bot className={`w-8 h-8 ${isRunning ? 'text-emerald-500' : 'text-emerald-500/50'}`} />
                   </div>
                   <div>
-                    <h3 className="font-semibold text-lg">Agent Active</h3>
-                    <p className="text-sm text-muted-foreground">Connected to Facebook</p>
+                    <h3 className="font-semibold text-lg">{isConnecting ? "Đang kết nối..." : "Bot đang hoạt động"}</h3>
+                    <p className="text-sm text-muted-foreground">Đã kết nối Facebook Messenger</p>
                   </div>
-                  <Button 
-                    variant="destructive" 
+                  <Button
+                    variant="destructive"
                     className="w-full mt-4 bg-red-500/10 text-red-500 hover:bg-red-500/20 border border-red-500/20"
                     onClick={handleStop}
                     disabled={stopBot.isPending}
+                    data-testid="button-stop"
                   >
                     {stopBot.isPending ? (
-                      <><RefreshCcw className="w-4 h-4 mr-2 animate-spin" /> Stopping...</>
+                      <><RefreshCcw className="w-4 h-4 mr-2 animate-spin" /> Đang dừng...</>
                     ) : (
-                      <><Square className="w-4 h-4 mr-2 fill-current" /> Stop Agent</>
+                      <><Square className="w-4 h-4 mr-2 fill-current" /> Dừng Bot</>
                     )}
                   </Button>
                 </div>
@@ -233,7 +363,7 @@ export default function Dashboard() {
             <Card className="border-border/50 bg-card/50">
               <CardContent className="p-6 flex flex-col items-center justify-center text-center">
                 <MessageCircle className="w-6 h-6 text-primary mb-3" />
-                <span className="text-2xl font-bold font-mono">
+                <span className="text-2xl font-bold font-mono" data-testid="text-messages-handled">
                   {botStatus?.messagesHandled || 0}
                 </span>
                 <span className="text-xs text-muted-foreground uppercase tracking-wider mt-1">Replies</span>
@@ -242,7 +372,7 @@ export default function Dashboard() {
             <Card className="border-border/50 bg-card/50">
               <CardContent className="p-6 flex flex-col items-center justify-center text-center">
                 <Clock className="w-6 h-6 text-primary mb-3" />
-                <span className="text-lg font-bold font-mono">
+                <span className="text-lg font-bold font-mono" data-testid="text-uptime">
                   {botStatus?.startedAt ? formatDistanceToNow(new Date(botStatus.startedAt)) : "0m"}
                 </span>
                 <span className="text-xs text-muted-foreground uppercase tracking-wider mt-1">Uptime</span>
@@ -261,13 +391,14 @@ export default function Dashboard() {
                     <Settings2 className="w-5 h-5 text-primary" />
                     Agent Behavior
                   </CardTitle>
-                  <CardDescription>Configure how the AI responds to incoming messages</CardDescription>
+                  <CardDescription>Cấu hình cách AI trả lời tin nhắn</CardDescription>
                 </div>
                 <div className="flex items-center gap-2 bg-background/50 px-3 py-1.5 rounded-lg border border-border/50">
-                  <Switch 
-                    checked={botStatus?.autoReplyEnabled || false} 
+                  <Switch
+                    checked={botStatus?.autoReplyEnabled || false}
                     onCheckedChange={handleToggleAutoReply}
                     disabled={!botStatus || updateSettings.isPending}
+                    data-testid="switch-autoreply"
                   />
                   <Label className="text-sm cursor-pointer select-none font-medium">
                     {botStatus?.autoReplyEnabled ? 'Auto-reply ON' : 'Auto-reply OFF'}
@@ -282,23 +413,25 @@ export default function Dashboard() {
                     <Label htmlFor="prompt">System Prompt</Label>
                     <span className="text-xs text-muted-foreground">Claude Model Instructions</span>
                   </div>
-                  <Textarea 
-                    id="prompt" 
+                  <Textarea
+                    id="prompt"
+                    data-testid="textarea-prompt"
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
                     className="min-h-[280px] font-mono text-sm bg-background/50 resize-none leading-relaxed"
-                    placeholder="You are a helpful customer service assistant..."
+                    placeholder="You are a helpful assistant..."
                   />
                 </div>
               </div>
             </CardContent>
             <CardFooter className="bg-muted/20 border-t border-border/50 px-6 py-4 flex justify-between items-center">
-              <p className="text-xs text-muted-foreground">Changes apply immediately to new conversations.</p>
-              <Button 
-                onClick={handleSavePrompt} 
+              <p className="text-xs text-muted-foreground">Thay đổi áp dụng ngay cho các cuộc trò chuyện mới.</p>
+              <Button
+                onClick={handleSavePrompt}
                 disabled={updateSettings.isPending || prompt === botStatus?.systemPrompt}
+                data-testid="button-save-prompt"
               >
-                Save Prompt
+                Lưu Prompt
               </Button>
             </CardFooter>
           </Card>

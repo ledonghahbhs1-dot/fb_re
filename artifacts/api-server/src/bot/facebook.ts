@@ -12,7 +12,11 @@ export function getFacebookApi() {
   return api;
 }
 
-export async function startBot(email: string, password: string): Promise<void> {
+export type LoginCredentials =
+  | { type: "credentials"; email: string; password: string }
+  | { type: "appstate"; appState: any[] };
+
+export async function startBot(credentials: LoginCredentials): Promise<void> {
   if (botState.status === "running" || botState.status === "connecting") {
     throw new Error("Bot đang chạy hoặc đang kết nối");
   }
@@ -41,17 +45,32 @@ export async function startBot(email: string, password: string): Promise<void> {
       forceLogin: false,
     };
 
-    fca({ email, password }, loginOptions, (err: any, fbApi: any) => {
+    const loginData =
+      credentials.type === "appstate"
+        ? { appState: credentials.appState }
+        : { email: credentials.email, password: credentials.password };
+
+    fca(loginData, loginOptions, (err: any, fbApi: any) => {
       if (err) {
         botState.status = "error";
-        botState.error = err.error ?? err.message ?? String(err);
-        logger.error({ err: botState.error }, "Facebook login failed");
-        return reject(new Error(botState.error ?? "Đăng nhập thất bại"));
+        const errMsg =
+          err.error ?? err.message ?? (typeof err === "string" ? err : JSON.stringify(err));
+        botState.error = errMsg;
+        logger.error({ err: errMsg }, "Facebook login failed");
+        return reject(new Error(errMsg ?? "Đăng nhập thất bại"));
       }
 
       api = fbApi;
       botState.status = "running";
       botState.startedAt = new Date();
+
+      if (credentials.type === "credentials") {
+        try {
+          const savedState = fbApi.getAppState();
+          logger.info({ appState: JSON.stringify(savedState) }, "AppState saved for reuse");
+        } catch (_) {}
+      }
+
       logger.info("Facebook bot connected and listening");
       resolve();
 
@@ -68,7 +87,6 @@ export async function startBot(email: string, password: string): Promise<void> {
         }
 
         if (!event || event.type !== "message") return;
-        if (event.isGroup && false) return;
 
         if (!botState.autoReplyEnabled) return;
 

@@ -1,5 +1,4 @@
 import { Router, type IRouter } from "express";
-import { logger } from "../lib/logger";
 import { botState } from "../bot/state";
 import { startBot, stopBot } from "../bot/facebook";
 import { clearConversation } from "../bot/claude";
@@ -18,15 +17,30 @@ router.get("/bot/status", (_req, res) => {
 });
 
 router.post("/bot/start", async (req, res) => {
-  const { email, password } = req.body as { email?: string; password?: string };
-
-  if (!email || !password) {
-    res.status(400).json({ error: "Vui lòng cung cấp email và password" });
-    return;
-  }
+  const { email, password, appState } = req.body as {
+    email?: string;
+    password?: string;
+    appState?: string;
+  };
 
   try {
-    await startBot(email, password);
+    if (appState) {
+      let parsed: any[];
+      try {
+        parsed = JSON.parse(appState);
+        if (!Array.isArray(parsed)) throw new Error("AppState phải là một JSON array");
+      } catch (parseErr: any) {
+        res.status(400).json({ error: "AppState JSON không hợp lệ: " + parseErr.message });
+        return;
+      }
+      await startBot({ type: "appstate", appState: parsed });
+    } else if (email && password) {
+      await startBot({ type: "credentials", email, password });
+    } else {
+      res.status(400).json({ error: "Vui lòng cung cấp email/password hoặc appState" });
+      return;
+    }
+
     res.json({ success: true, message: "Bot đã kết nối thành công" });
   } catch (err: any) {
     res.status(500).json({ error: err.message ?? "Đăng nhập thất bại" });
