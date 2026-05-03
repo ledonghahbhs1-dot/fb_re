@@ -10,13 +10,15 @@ export interface BotState {
   ignoredThreadIds: Set<string>;
 }
 
+const DEFAULT_PROMPT =
+  "Bạn là một trợ lý AI thông minh, thân thiện và hữu ích. Hãy trả lời ngắn gọn, tự nhiên bằng tiếng Việt hoặc ngôn ngữ mà người dùng đang dùng. Không tiết lộ rằng bạn là AI trừ khi được hỏi trực tiếp.";
+
 export const botState: BotState = {
   status: "stopped",
   error: null,
   startedAt: null,
   messagesHandled: 0,
-  systemPrompt:
-    "Bạn là một trợ lý AI thông minh, thân thiện và hữu ích. Hãy trả lời ngắn gọn, tự nhiên bằng tiếng Việt hoặc ngôn ngữ mà người dùng đang dùng. Không tiết lộ rằng bạn là AI trừ khi được hỏi trực tiếp.",
+  systemPrompt: process.env["SYSTEM_PROMPT"] ?? DEFAULT_PROMPT,
   autoReplyEnabled: true,
   ignoredThreadIds: new Set(),
 };
