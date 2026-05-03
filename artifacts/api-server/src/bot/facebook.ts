@@ -464,11 +464,15 @@ async function scrapeConversationDOM(page: Page, initOnly = false): Promise<void
     // The sidebar has aria-labels with "members" / "thành viên" (Facebook Groups links)
     // which would cause false positives on DM threads. Scope check to [role="main"] header only.
     let isGroupThread = false;
+    let groupDetectReason = "";
     const mainEl = document.querySelector('[role="main"]');
     const headerEl = mainEl?.querySelector("header") ?? mainEl?.querySelector('[role="banner"]');
     // Check header text for "X members" / "X thành viên"
-    const headerText = headerEl?.textContent ?? "";
-    if (/\d+\s*(thành viên|members)/i.test(headerText)) isGroupThread = true;
+    const headerText = (headerEl?.textContent ?? "").slice(0, 200);
+    if (/\d+\s*(thành viên|members)/i.test(headerText)) {
+      isGroupThread = true;
+      groupDetectReason = `header text: "${headerText.slice(0, 80)}"`;
+    }
     // Check header aria-labels for group indicators
     if (!isGroupThread && headerEl) {
       headerEl.querySelectorAll("[aria-label]").forEach((el) => {
@@ -478,6 +482,7 @@ async function scrapeConversationDOM(page: Page, initOnly = false): Promise<void
           !/(gửi|send|reply|attach|emoji|like|react)/i.test(lb)
         ) {
           isGroupThread = true;
+          groupDetectReason = `header aria-label: "${lb.slice(0, 80)}"`;
         }
       });
     }
@@ -486,7 +491,10 @@ async function scrapeConversationDOM(page: Page, initOnly = false): Promise<void
       const threadNameArea = mainEl.querySelector('[data-testid="conversation_name"], [aria-label*="Cuộc trò chuyện"], [aria-label*="Conversation"]');
       if (threadNameArea) {
         const lb = (threadNameArea.getAttribute("aria-label") ?? "").toLowerCase();
-        if (/thành viên|members|participants|nhóm chat|group chat/i.test(lb)) isGroupThread = true;
+        if (/thành viên|members|participants|nhóm chat|group chat/i.test(lb)) {
+          isGroupThread = true;
+          groupDetectReason = `thread name area aria-label: "${lb.slice(0, 80)}"`;
+        }
       }
     }
 
@@ -500,7 +508,7 @@ async function scrapeConversationDOM(page: Page, initOnly = false): Promise<void
 
     return {
       threadID, isE2EE, url,
-      isGroupThread,
+      isGroupThread, groupDetectReason,
       rowCount: rows.length,
       rowMsgs: msgs.slice(-6),       // last 6 rows
       sentByCount: sentByMsgs.length,
@@ -525,17 +533,18 @@ async function scrapeConversationDOM(page: Page, initOnly = false): Promise<void
 
   // ── Skip group/community threads — only reply to personal DMs ──
   if (result.isGroupThread) {
-    blog("info", { threadID: result.threadID }, "Skipping group thread (DM-only mode)");
+    blog("info", { threadID: result.threadID, reason: result.groupDetectReason }, "Skipping group thread (DM-only mode)");
     return;
   }
 
   blog("info", {
     threadID: result.threadID,
     isE2EE: result.isE2EE,
+    isGroup: false,
     rowCount: result.rowCount,
     sentByCount: result.sentByCount,
     uniqueLabels: result.uniqueLabels,
-  }, "DOM scrape diagnostics");
+  }, "DOM scrape diagnostics — thread is personal DM ✓");
 
   if (result.rowMsgs.length > 0) {
     blog("info", { sample: result.rowMsgs }, "DOM row messages sample");
