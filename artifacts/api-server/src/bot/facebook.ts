@@ -99,19 +99,29 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
           return;
         }
 
-        if (!event || event.type !== "message") return;
+        if (!event) return;
 
-        if (!botState.autoReplyEnabled) return;
+        logger.info({ eventType: event.type, threadID: event.threadID, senderID: event.senderID }, "Event received");
+
+        if (event.type !== "message") return;
+
+        if (!botState.autoReplyEnabled) {
+          logger.info({ threadId: event.threadID }, "Auto-reply disabled, skipping");
+          return;
+        }
 
         const threadId: string = event.threadID;
         const body: string = event.body ?? "";
 
         if (!body.trim()) return;
 
-        if (botState.ignoredThreadIds.has(threadId)) return;
+        if (botState.ignoredThreadIds.has(threadId)) {
+          logger.info({ threadId }, "Thread ignored, skipping");
+          return;
+        }
 
         const senderName = event.senderName ?? "người dùng";
-        logger.info({ threadId, body: body.substring(0, 80) }, "Message received");
+        logger.info({ threadId, senderID: event.senderID, body: body.substring(0, 80) }, "Message received — sending to Claude");
 
         getClaudeReply(threadId, body, botState.systemPrompt)
           .then((reply) => {
