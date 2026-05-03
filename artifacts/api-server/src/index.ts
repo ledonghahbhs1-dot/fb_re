@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { startBot } from "./bot/facebook";
 
 const rawPort = process.env["PORT"];
 
@@ -15,11 +16,66 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
+// Parse cookie string or JSON array into AppState format for Playwright injection.
+// Accepts: "c_user=xxx; xs=yyy; ..." OR JSON array "[{key,value,...}]"
+function parseFbCookies(raw: string): any[] | null {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("[")) {
+    try {
+      const arr = JSON.parse(trimmed);
+      return Array.isArray(arr) && arr.length > 0 ? arr : null;
+    } catch {
+      return null;
+    }
+  }
+  if (trimmed.includes("=")) {
+    const cookies = trimmed
+      .split(";")
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((p) => {
+        const eq = p.indexOf("=");
+        if (eq === -1) return null;
+        return {
+          key: p.slice(0, eq).trim(),
+          value: p.slice(eq + 1).trim(),
+          domain: ".facebook.com",
+          path: "/",
+          hostOnly: false,
+          creation: new Date().toISOString(),
+          lastAccessed: new Date().toISOString(),
+        };
+      })
+      .filter(Boolean);
+    return cookies.length > 0 ? cookies : null;
+  }
+  return null;
+}
+
+app.listen(port, async (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
     process.exit(1);
   }
 
   logger.info({ port }, "Server listening");
+
+  // Auto-start bot when FB_COOKIES env var is set.
+  // On Railway: add FB_COOKIES variable (raw cookie string or JSON appstate array).
+  // The bot starts automatically on deploy — no dashboard interaction needed.
+  const fbCookiesRaw = process.env["FB_COOKIES"];
+  if (fbCookiesRaw) {
+    logger.info("FB_COOKIES env var detected — auto-starting bot");
+    const appState = parseFbCookies(fbCookiesRaw);
+    if (!appState) {
+      logger.error("FB_COOKIES format invalid — expected cookie string or JSON array. Bot NOT started.");
+    } else {
+      try {
+        await startBot({ type: "appstate", appState });
+        logger.info("Bot auto-started from FB_COOKIES ✓");
+      } catch (startErr: any) {
+        logger.error({ err: startErr?.message }, "Auto-start failed — check FB_COOKIES validity");
+      }
+    }
+  }
 });

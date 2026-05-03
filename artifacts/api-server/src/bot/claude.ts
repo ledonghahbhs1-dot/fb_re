@@ -1,14 +1,23 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger";
 
-const baseURL = process.env["AI_INTEGRATIONS_ANTHROPIC_BASE_URL"];
-const apiKey = process.env["AI_INTEGRATIONS_ANTHROPIC_API_KEY"];
+// Replit AI integration proxy (available on Replit only)
+const replitBaseURL = process.env["AI_INTEGRATIONS_ANTHROPIC_BASE_URL"];
+const replitApiKey = process.env["AI_INTEGRATIONS_ANTHROPIC_API_KEY"];
 
-if (!baseURL || !apiKey) {
-  throw new Error("AI_INTEGRATIONS_ANTHROPIC_BASE_URL and AI_INTEGRATIONS_ANTHROPIC_API_KEY must be set");
+// Standard Anthropic API key (for Railway / any non-Replit deployment)
+const directApiKey = process.env["ANTHROPIC_API_KEY"];
+
+if (!replitApiKey && !directApiKey) {
+  throw new Error(
+    "Thiếu API key cho Claude. Trên Railway: thêm ANTHROPIC_API_KEY vào Variables. " +
+    "Trên Replit: dùng Anthropic integration."
+  );
 }
 
-const anthropic = new Anthropic({ baseURL, apiKey });
+const anthropic = replitBaseURL && replitApiKey
+  ? new Anthropic({ baseURL: replitBaseURL, apiKey: replitApiKey })
+  : new Anthropic({ apiKey: directApiKey! });
 
 const conversationHistory = new Map<string, Anthropic.MessageParam[]>();
 
@@ -27,7 +36,7 @@ export async function getClaudeReply(
 
   try {
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
+      model: "claude-sonnet-4-5",
       max_tokens: 8192,
       system: systemPrompt,
       messages: history,
