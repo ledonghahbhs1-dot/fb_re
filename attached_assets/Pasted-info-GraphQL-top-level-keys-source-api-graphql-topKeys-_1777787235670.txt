@@ -1,0 +1,89 @@
+info
+GraphQL top-level keys {"source":"/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:46:57
+info
+GraphQL top-level keys {"source":"/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:46:57
+info
+GraphQL top-level keys {"source":"https://www.facebook.com/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:46:58
+info
+GraphQL top-level keys {"source":"/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:46:58
+info
+GraphQL top-level keys {"source":"https://www.facebook.com/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:46:58
+info
+GraphQL top-level keys {"source":"/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:46:58
+info
+GraphQL top-level keys {"source":"https://www.facebook.com/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:46:58
+info
+GraphQL top-level keys {"source":"/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:46:58
+info
+GraphQL top-level keys {"source":"https://www.facebook.com/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:46:58
+info
+GraphQL top-level keys {"source":"https://www.facebook.com/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:46:58
+info
+GraphQL top-level keys {"source":"/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:46:58
+info
+GraphQL top-level keys {"source":"/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:46:58
+info
+GraphQL top-level keys {"source":"https://www.facebook.com/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:46:58
+info
+GraphQL top-level keys {"source":"/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:47:00
+info
+GraphQL top-level keys {"source":"https://www.facebook.com/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:47:00
+info
+GraphQL top-level keys {"source":"/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:47:00
+info
+DOM scrape diagnostics {"threadID":"7226356070742085","isE2EE":false,"rowCount":5,"sentByCount":6,"uniqueLabels":["Quay lại trang trước","Facebook","Thoát chế độ gõ trước","Tìm kiếm trên Facebook","Trang chủ","Thước phim","Marketplace","Nhóm","Trò chơi","Cài đặt và kiểm soát tài khoản"]}
+12:47:00
+info
+DOM row messages sample {"sample":[{"texts":["Tun Tun","xin chào","·","1 phút"],"label":"","timeHint":"","isMine":false},{"texts":["D25CQAE01-B","Anhkhoa: amen","·","6 giờ"],"label":"","timeHint":"","isMine":false},{"texts":["Like3s","Dạ thường đơn buff sẽ lên trong khoảng 5–30 phút sau khi xác nhận đơn ạ. Tuy nhiên trong một số thời điểm server quá tải thì thời gian có thể mất khoảng 24–48 giờ để hoàn tất. Anh/chị cứ yên tâm giúp em, bên em sẽ theo dõi và xử lý đơn sớm nhất có thể ạ.","·","19 giờ","·","Trả lời?"],"label":"","timeHint":"","isMine":false},{"texts":["Duy Phatt","Bạn: Vừa mất điện","·","1 ngày"],"label":"","timeHint":"","isMine":false},{"texts":["Dong Ha Le","Tin nhắn và cuộc gọi được bảo mật bằng tính năng mã hóa đầu cuối.","·","1 ngày"],"label":"","timeHint":"","isMine":false}]}
+12:47:00
+info
+DOM sentBy messages sample {"sample":[{"lb":"Lúc 14:58 25 Tháng 10, 2023, Bạn: Gửi t câu 9","msgBody":"Gửi t câu 9","senderName":"Người dùng"},{"lb":"Nhập, Tin nhắn do Phatt gửi lúc 08:49 12 Tháng 11, 2023: Kkkk","msgBody":"Kkkk","senderName":"Phatt"},{"lb":"Nhập, Tin nhắn do Phatt gửi lúc 08:49 12 Tháng 11, 2023: Chắc ko ha","msgBody":"Chắc ko ha","senderName":"Phatt"},{"lb":"Nhập, Tin nhắn do gửi lúc 00:00 1 Tháng 1, 1970: Tin nhắn và cuộc gọi mới được bảo mật bằng tính năng mã hóa đầu cuối. Chỉ những người tham","msgBody":"Tin nhắn và cuộc gọi mới được bảo mật bằng tính năng mã hóa đầu cuối. Chỉ những người tham gia đoạn chat này mới có thể đọc, nghe hoặc chia sẻ.","senderName":"Người dùng"}]}
+12:47:00
+info
+DOM: new message detected {"threadID":"7226356070742085","senderName":"Người dùng","text":"Gửi t câu 9"}
+12:47:00
+info
+Message → Claude {"threadId":"7226356070742085","senderID":"0","body":"Gửi t câu 9"}
+12:47:00
+info
+GraphQL top-level keys {"source":"https://www.facebook.com/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:47:00
+info
+GraphQL top-level keys {"source":"https://www.facebook.com/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:47:01
+info
+GraphQL top-level keys {"source":"/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:47:01
+info
+GraphQL top-level keys {"source":"/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:47:09
+erro
+Reply failed {"err":"TimeoutError: locator.click: Timeout 5000ms exceeded.\nCall log:\n\u001b[2m - waiting for locator('[role=\"textbox\"][contenteditable=\"true\"]').last()\u001b[22m\n\u001b[2m - locator resolved to <div tabindex=\"0\" role=\"textbox\" spellcheck=\"true\" aria-placeholder=\"Aa\" contenteditable=\"true\" aria-describedby=\"_r_2n_\" data-lexical-editor=\"true\" aria-label=\"Viết cho Duy Phatt\" class=\"xzsf02u x1a2a7pz x1n2onr6 x14wi4xw x1iyjqo2 x19gmnou xisnujt xeuugli x1odjw0f notranslate\">…</div>\u001b[22m\n\u001b[2m - attempting click action\u001b[22m\n\u001b[2m 2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m - element is visible, enabled and stable\u001b[22m\n\u001b[2m - scrolling into view if needed\u001b[22m\n\u001b[2m - done scrolling\u001b[22m\n\u001b[2m - <div class=\"x1qjc9v5 x9f619 x78zum5 xdt5ytf x1iyjqo2 xl56j7k xshlqvt\">…</div> from <div class=\"x1n2onr6 x1vjfegm\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m - retrying click action\u001b[22m\n\u001b[2m - waiting 20ms\u001b[22m\n\u001b[2m 2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m - element is visible, enabled and stable\u001b[22m\n\u001b[2m - scrolling into view if needed\u001b[22m\n\u001b[2m - done scrolling\u001b[22m\n\u001b[2m - <div class=\"x1qjc9v5 x9f619 x78zum5 xdt5ytf x1iyjqo2 xl56j7k xshlqvt\">…</div> from <div class=\"x1n2onr6 x1vjfegm\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m - retrying click action\u001b[22m\n\u001b[2m - waiting 100ms\u001b[22m\n\u001b[2m 9 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m - element is visible, enabled and stable\u001b[22m\n\u001b[2m - scrolling into view if needed\u001b[22m\n\u001b[2m - done scrolling\u001b[22m\n\u001b[2m - <div class=\"x1qjc9v5 x9f619 x78zum5 xdt5ytf x1iyjqo2 xl56j7k xshlqvt\">…</div> from <div class=\"x1n2onr6 x1vjfegm\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m - retrying click action\u001b[22m\n\u001b[2m - waiting 500ms\u001b[22m\n","threadId":"7226356070742085"}
+12:47:10
+info
+GraphQL top-level keys {"source":"https://www.facebook.com/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:47:10
+info
+GraphQL top-level keys {"source":"/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:47:11
+info
+GraphQL top-level keys {"source":"https://www.facebook.com/api/graphql/","topKeys":["__ar","error","errorSummary","errorDescription","isNotCritical","rid","payload","lid"]}
+12:47:11
+info
+GraphQL top-level keys

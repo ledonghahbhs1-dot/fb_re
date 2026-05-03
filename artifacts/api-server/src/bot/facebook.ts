@@ -290,23 +290,29 @@ async function sendFbMessageUI(page: Page, threadID: string, text: string): Prom
     '[contenteditable="true"]',
   ];
 
+  // Wait for the Lexical editor to be ready before interacting
+  await page.waitForTimeout(1000);
+
   let clicked = false;
   for (const sel of INPUT_SELECTORS) {
     const loc = page.locator(sel).last();
-    const visible = await loc.isVisible({ timeout: 2000 }).catch(() => false);
+    const visible = await loc.isVisible({ timeout: 3000 }).catch(() => false);
     if (visible) {
-      await loc.click({ timeout: 5000 });
+      // Use force:true to bypass Playwright's actionability checks (element may be
+      // technically covered by a thin overlay that doesn't affect real interaction)
+      await loc.click({ timeout: 10000, force: true });
       clicked = true;
       break;
     }
   }
   if (!clicked) throw new Error("Không tìm thấy ô nhập tin nhắn");
 
-  // Clear any leftover text, then type the reply
+  // Small pause to ensure focus landed, then type
+  await page.waitForTimeout(300);
   await page.keyboard.press("Control+a");
   await page.keyboard.type(text, { delay: 15 });
   await page.keyboard.press("Enter");
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(800);
 
   blog("info", { threadID, len: text.length }, "Message sent via UI ✓");
 }
@@ -369,22 +375,26 @@ async function scrapeConversationDOM(page: Page, initOnly = false): Promise<void
     const sentByMsgs: any[] = [];
     document.querySelectorAll("[aria-label]").forEach((el) => {
       const lb = el.getAttribute("aria-label") ?? "";
-      if (!(/gửi/i.test(lb) || /sent (a message|by|at)/i.test(lb))) return;
 
-      // Skip my own messages
-      if (/\bdo bạn gửi\b/i.test(lb) || /\byou sent\b/i.test(lb)) return;
+      // Only match the specific Facebook "sent by" aria-label formats:
+      //   VN: "Nhập, Tin nhắn do [SENDER] gửi lúc [TIME]: [MSG]"
+      //   EN: "Press Enter, Message from [SENDER] sent at [TIME]: [MSG]"
+      // This avoids false positives where the message BODY contains "gửi".
+      const isVN = /Tin nhắn do\s+.+?\s+gửi lúc/i.test(lb);
+      const isEN = /Message from\s+.+?\s+sent at/i.test(lb);
+      if (!isVN && !isEN) return;
+
+      // Skip my own messages ("do bạn gửi" / "you sent")
+      if (/do bạn gửi/i.test(lb) || /you sent/i.test(lb)) return;
 
       // Extract message body after the last ": "
       const colonIdx = lb.lastIndexOf(": ");
       const msgBody = colonIdx >= 0 ? lb.slice(colonIdx + 2).trim() : "";
 
-      // Extract sender name:
-      //   VN: "do [SENDER] gửi lúc"  →  capture between "do " and " gửi"
-      //   EN: "from [SENDER] sent at" →  capture between "from " and " sent"
-      let senderName = "";
+      // Extract sender name between "do " and " gửi" / "from " and " sent"
       const vnMatch = lb.match(/\bdo\s+(.+?)\s+gửi\b/i);
       const enMatch = lb.match(/\bfrom\s+(.+?)\s+sent\b/i);
-      senderName = (vnMatch?.[1] ?? enMatch?.[1] ?? "Người dùng").trim();
+      const senderName = (vnMatch?.[1] ?? enMatch?.[1] ?? "Người dùng").trim();
 
       if (msgBody) sentByMsgs.push({ lb: lb.slice(0, 140), msgBody, senderName });
     });
