@@ -248,79 +248,67 @@ async function handleMessage(
 
   try {
     const reply = await getClaudeReply(threadId, body, botState.systemPrompt);
-    await sendFbMessage(bPage, threadId, reply, threadType);
+    await sendFbMessageUI(bPage, threadId, reply);
     botState.messagesHandled++;
     blog("info", { threadId, senderName }, "Reply sent ✓");
   } catch (err) {
     blog("error", { err: String(err), threadId }, "Reply failed");
     try {
-      await sendFbMessage(bPage, threadId, "Xin lỗi, tôi đang gặp sự cố kỹ thuật. Vui lòng thử lại sau.", threadType);
+      await sendFbMessageUI(bPage, threadId, "Xin lỗi, tôi đang gặp sự cố kỹ thuật. Vui lòng thử lại sau.");
     } catch (_) {}
   }
 }
 
 // ---------------------------------------------------------------------------
-// Send message — works on both messenger.com and facebook.com
+// Send message via UI interaction — works for all thread types (1:1, group, E2EE)
+// Does NOT require fb_dtsg tokens or knowledge of the REST/GraphQL API.
 // ---------------------------------------------------------------------------
 
-function genOfflineId(): string {
-  const epoch = BigInt(Date.now());
-  const rand = BigInt(Math.floor(Math.random() * 0x3fffff));
-  return String((epoch << 22n) | rand);
-}
+async function sendFbMessageUI(page: Page, threadID: string, text: string): Promise<void> {
+  // Navigate to the thread if not already there
+  const currentUrl = page.url();
+  const isCorrectThread =
+    currentUrl.includes(`/t/${threadID}`) || currentUrl.includes(`/e2ee/t/${threadID}`);
 
-async function sendFbMessage(page: Page, threadID: string, text: string, threadType: string): Promise<void> {
-  const isGroup = threadType === "GROUP";
-  const ts = String(Date.now());
-  const params: Record<string, string> = {
-    client: "mercury",
-    fb_dtsg: sessionDtsg,
-    __user: sessionUID,
-    action_type: "ma-type:user-generated-message",
-    has_attachment: "false",
-    message_id: `<${ts}:01:01>`,
-    offline_threading_id: genOfflineId(),
-    source: "source:chat:web",
-    body: text,
-    timestamp: ts,
-  };
-  if (isGroup) params["thread_fbid"] = threadID;
-  else params["other_user_fbid"] = threadID;
-
-  // Always use the current page's own origin to avoid CORS errors.
-  // The page is on facebook.com, so this sends to facebook.com/messaging/send/.
-  const result = await page.evaluate(
-    async (params: Record<string, string>) => {
-      const origin = window.location.origin; // https://www.facebook.com
-      const body = new URLSearchParams(params);
-      try {
-        const resp = await fetch(`${origin}/messaging/send/`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "X-Requested-With": "XMLHttpRequest",
-          },
-          body: body.toString(),
-          credentials: "include",
-        });
-        const txt = await resp.text();
-        const clean = txt.replace(/^for\s*\(;;\);\s*/, "");
-        try { return { ok: true, data: JSON.parse(clean), status: resp.status }; }
-        catch { return { ok: false, raw: txt.slice(0, 400), status: resp.status }; }
-      } catch (e: any) {
-        return { ok: false, fetchErr: String(e?.message ?? e), status: 0 };
-      }
-    },
-    params
-  );
-
-  if (!result.ok) {
-    throw new Error(`Send fetch failed: ${result.fetchErr ?? result.raw} (HTTP ${result.status})`);
+  if (!isCorrectThread) {
+    blog("info", { threadID }, "Navigating to thread for send");
+    await page.goto(`https://www.facebook.com/messages/t/${threadID}/`, {
+      waitUntil: "domcontentloaded",
+      timeout: 20000,
+    });
+    await page.waitForTimeout(2500);
   }
-  if (result.data?.error_results?.length > 0) {
-    throw new Error(`Send API error: ${JSON.stringify(result.data.error_results[0])}`);
+
+  // Facebook uses a contenteditable Lexical editor div for the message input.
+  // Try multiple selectors to handle both VN and EN locales.
+  const INPUT_SELECTORS = [
+    '[aria-label*="nhắn tin"]',
+    '[aria-label*="Nhập tin nhắn"]',
+    '[aria-label*="Message"]',
+    '[aria-label*="message"]',
+    '[role="textbox"][contenteditable="true"]',
+    '[contenteditable="true"]',
+  ];
+
+  let clicked = false;
+  for (const sel of INPUT_SELECTORS) {
+    const loc = page.locator(sel).last();
+    const visible = await loc.isVisible({ timeout: 2000 }).catch(() => false);
+    if (visible) {
+      await loc.click({ timeout: 5000 });
+      clicked = true;
+      break;
+    }
   }
-  blog("info", { threadID, status: result.status }, "Send response OK");
+  if (!clicked) throw new Error("Không tìm thấy ô nhập tin nhắn");
+
+  // Clear any leftover text, then type the reply
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type(text, { delay: 15 });
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(600);
+
+  blog("info", { threadID, len: text.length }, "Message sent via UI ✓");
 }
 
 // ---------------------------------------------------------------------------
@@ -336,7 +324,7 @@ interface DomMessage {
   msgKey: string;      // unique key for dedup
 }
 
-async function scrapeConversationDOM(page: Page): Promise<void> {
+async function scrapeConversationDOM(page: Page, initOnly = false): Promise<void> {
   if (stopSignal) return;
 
   // Wait for React to render — E2EE threads need extra time to decrypt
@@ -452,12 +440,24 @@ async function scrapeConversationDOM(page: Page): Promise<void> {
   const threadID = result.threadID;
   if (!threadID) return;
 
+  if (initOnly) {
+    // First poll: just mark all visible messages as seen so we don't reply to history
+    let marked = 0;
+    for (const m of result.sentByMsgs as any[]) {
+      if (!m.msgBody) continue;
+      const msgKey = `dom-${threadID}-${m.msgBody.slice(0, 50)}`;
+      repliedMessageIds.add(msgKey);
+      marked++;
+    }
+    blog("info", { threadID, marked }, "First poll: existing messages marked as seen (no reply)");
+    return;
+  }
+
   for (const m of result.sentByMsgs as any[]) {
     const text: string = m.msgBody;
     const senderName: string = m.senderName;
     if (!text) continue;
 
-    // Use cleaned message body for dedup key (not full label with timestamp)
     const msgKey = `dom-${threadID}-${text.slice(0, 50)}`;
     if (repliedMessageIds.has(msgKey)) continue;
 
@@ -511,28 +511,64 @@ async function setupInterceptor(page: Page) {
 }
 
 // ---------------------------------------------------------------------------
-// Poll loop — reload messenger.com to trigger fresh GraphQL fetches
+// Extract thread IDs visible in the sidebar/inbox
 // ---------------------------------------------------------------------------
+async function getSidebarThreadIDs(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const links = Array.from(document.querySelectorAll('a[href*="/messages/t/"], a[href*="/messages/e2ee/t/"]'));
+    const seen = new Set<string>();
+    for (const link of links) {
+      const href = link.getAttribute("href") ?? "";
+      const m = href.match(/\/messages\/(?:e2ee\/)?t\/(\d+)/);
+      if (m?.[1]) seen.add(m[1]);
+    }
+    return [...seen].slice(0, 10); // top 10 conversations
+  });
+}
 
+// ---------------------------------------------------------------------------
+// Poll loop — multi-conversation: check top conversations on every cycle
+// ---------------------------------------------------------------------------
 function startPollLoop() {
+  let firstPoll = true;
+
   async function doPoll() {
     if (stopSignal || !bPage) return;
 
     try {
-      // Reload the page to trigger fresh API calls + let E2EE decrypt + render
-      await bPage.reload({ waitUntil: "domcontentloaded", timeout: 25000 });
-      // Refresh tokens after reload
+      // Always start from the inbox to get an updated sidebar
+      await bPage.goto("https://www.facebook.com/messages/", {
+        waitUntil: "domcontentloaded",
+        timeout: 25000,
+      });
+      // Let the sidebar load
+      await bPage.waitForTimeout(2500);
+
       const dtsg = await extractDtsg(bPage);
       if (dtsg) sessionDtsg = dtsg;
-      const currentUrl = bPage.url();
-      blog("info", { url: currentUrl }, "Poll reload done");
 
-      // DOM scrape — works for both plain and E2EE threads
-      await scrapeConversationDOM(bPage);
+      // Discover conversations from the sidebar
+      const threadIDs = await getSidebarThreadIDs(bPage);
+      blog("info", { threadIDs, initOnly: firstPoll }, "Poll: discovered conversations");
+
+      // Visit each conversation and scrape it
+      for (const tid of threadIDs) {
+        if (stopSignal) break;
+
+        await bPage.goto(`https://www.facebook.com/messages/t/${tid}/`, {
+          waitUntil: "domcontentloaded",
+          timeout: 20000,
+        });
+        await bPage.waitForTimeout(1800);
+
+        await scrapeConversationDOM(bPage, firstPoll);
+      }
+
+      firstPoll = false;
 
     } catch (err: any) {
       const msg = err?.message ?? String(err);
-      blog("error", { err: msg }, "Poll reload error");
+      blog("error", { err: msg }, "Poll error");
       if (msg.includes("Target closed") || msg.includes("browser has been closed")) {
         botState.status = "error";
         botState.error = "Browser gặp lỗi. Vui lòng dừng và khởi động lại bot.";
@@ -540,11 +576,11 @@ function startPollLoop() {
       }
     }
 
-    if (!stopSignal) pollTimer = setTimeout(doPoll, 8000);
+    if (!stopSignal) pollTimer = setTimeout(doPoll, 15000);
   }
 
   // First poll after a short delay to let the page fully settle
-  pollTimer = setTimeout(doPoll, 6000);
+  pollTimer = setTimeout(doPoll, 5000);
 }
 
 // ---------------------------------------------------------------------------
