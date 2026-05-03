@@ -46,7 +46,7 @@ if (replitBaseURL && replitApiKey) {
     baseURL: "https://models.inference.ai.azure.com",
     apiKey: githubToken,
   });
-  defaultModel = AI_MODEL ?? "claude-3-5-sonnet";
+  defaultModel = AI_MODEL ?? "claude-3-5-sonnet-20241022";
   logger.info("Claude: using GitHub Models free tier");
 } else if (customBaseURL && customApiKey) {
   provider = "openai-compat";
@@ -72,6 +72,8 @@ export async function getClaudeReply(
   const history = conversationHistory.get(threadId) ?? [];
   history.push({ role: "user", content: userMessage });
   if (history.length > 20) history.splice(0, history.length - 20);
+
+  logger.info({ threadId, model: defaultModel, provider }, "Calling AI API");
 
   try {
     let replyText: string;
@@ -100,11 +102,14 @@ export async function getClaudeReply(
       throw new Error("No AI client configured");
     }
 
+    logger.info({ threadId, replyLen: replyText.length }, "AI API success");
     history.push({ role: "assistant", content: replyText });
     conversationHistory.set(threadId, history);
     return replyText;
-  } catch (err) {
-    logger.error({ err, threadId }, "AI API error");
+  } catch (err: any) {
+    const errMsg = err?.message ?? String(err);
+    const statusCode = err?.status ?? err?.statusCode ?? null;
+    logger.error({ err: errMsg, statusCode, threadId, model: defaultModel, provider }, "AI API error");
     throw err;
   }
 }
