@@ -237,17 +237,28 @@ export default function Dashboard() {
                         </div>
 
                         {showGuide && (
-                          <div className="bg-muted/40 border border-border/50 rounded-md p-3 text-xs space-y-2 text-muted-foreground">
-                            <p className="font-semibold text-foreground">Cách lấy App State:</p>
-                            <ol className="list-decimal list-inside space-y-1.5 leading-relaxed">
-                              <li>Đăng nhập <strong>facebook.com</strong> trên Chrome/Firefox</li>
-                              <li>Cài extension <strong>"c3c-ufc-appstate"</strong> trên Chrome Web Store</li>
-                              <li>Nhấn icon extension khi đang ở trang facebook.com</li>
-                              <li>Nhấn <strong>"Get AppState"</strong> rồi Copy JSON</li>
-                              <li>Paste vào ô bên dưới</li>
-                            </ol>
-                            <p className="text-amber-400/80 pt-1">
-                              App State ổn định hơn nhiều so với email/password. Facebook ít phát hiện bot hơn.
+                          <div className="bg-muted/40 border border-border/50 rounded-md p-3 text-xs space-y-3 text-muted-foreground">
+                            <div>
+                              <p className="font-semibold text-foreground mb-1.5">Cách 1 — Dùng extension (dễ nhất):</p>
+                              <ol className="list-decimal list-inside space-y-1 leading-relaxed">
+                                <li>Đăng nhập <strong>facebook.com</strong> trên Chrome</li>
+                                <li>Cài <strong>"c3c-ufc-appstate"</strong> từ Chrome Web Store</li>
+                                <li>Nhấn icon extension → <strong>"Get AppState"</strong> → Copy JSON</li>
+                                <li>Paste vào ô bên dưới</li>
+                              </ol>
+                            </div>
+                            <div className="border-t border-border/30 pt-2">
+                              <p className="font-semibold text-foreground mb-1.5">Cách 2 — Copy cookie thủ công từ DevTools:</p>
+                              <ol className="list-decimal list-inside space-y-1 leading-relaxed">
+                                <li>Vào <strong>facebook.com</strong>, nhấn <strong>F12</strong> → tab <strong>Application</strong></li>
+                                <li>Chọn <strong>Cookies → https://www.facebook.com</strong></li>
+                                <li>Tìm cookie <strong>c_user</strong>, <strong>xs</strong>, <strong>datr</strong>, <strong>fr</strong></li>
+                                <li>Copy theo định dạng: <code className="bg-background/60 px-1 rounded">c_user=123; xs=abc; datr=xyz; fr=def</code></li>
+                                <li>Paste vào ô bên dưới (app sẽ tự chuyển đổi)</li>
+                              </ol>
+                            </div>
+                            <p className="text-amber-400/80 border-t border-border/30 pt-2">
+                              Bắt buộc phải có cookie <strong>c_user</strong> và <strong>xs</strong>. Nên copy thêm <strong>datr</strong>, <strong>fr</strong>, <strong>sb</strong>.
                             </p>
                           </div>
                         )}
@@ -255,14 +266,14 @@ export default function Dashboard() {
                         <Textarea
                           id="appstate-input"
                           data-testid="input-appstate"
-                          placeholder={'[{"key":"c_user","value":"...","domain":".facebook.com",...},...]'}
+                          placeholder={"Dán JSON array hoặc cookie string vào đây...\nVí dụ: c_user=123456; xs=abc:def; datr=xyz; fr=..."}
                           value={appState}
                           onChange={(e) => setAppState(e.target.value)}
                           required
                           className="font-mono text-xs min-h-[120px] bg-background/50 resize-none"
                         />
                         <p className="text-xs text-muted-foreground">
-                          Khuyến nghị: dùng App State thay vì email/password.
+                          Chấp nhận: JSON array <code className="bg-muted px-1 rounded">[&#123;...&#125;]</code> hoặc cookie string <code className="bg-muted px-1 rounded">c_user=xxx; xs=xxx</code>
                         </p>
                       </div>
                       <Button

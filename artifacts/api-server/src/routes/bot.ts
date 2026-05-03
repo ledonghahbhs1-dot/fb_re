@@ -2,8 +2,84 @@ import { Router, type IRouter } from "express";
 import { botState } from "../bot/state";
 import { startBot, stopBot } from "../bot/facebook";
 import { clearConversation } from "../bot/claude";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
+
+/**
+ * Convert cookie string (e.g. "c_user=123; xs=abc") to AppState array format
+ * used by fca-unofficial.
+ */
+function cookieStringToAppState(cookieStr: string): any[] {
+  return cookieStr
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const eqIdx = part.indexOf("=");
+      if (eqIdx === -1) return null;
+      const key = part.slice(0, eqIdx).trim();
+      const value = part.slice(eqIdx + 1).trim();
+      return {
+        key,
+        value,
+        domain: ".facebook.com",
+        path: "/",
+        hostOnly: false,
+        creation: new Date().toISOString(),
+        lastAccessed: new Date().toISOString(),
+      };
+    })
+    .filter(Boolean);
+}
+
+/**
+ * Parse AppState from user input — accepts:
+ *   1. JSON array (fca-unofficial native format)
+ *   2. Cookie string "c_user=xxx; xs=xxx; ..."
+ */
+function parseAppState(raw: string): { parsed: any[]; error?: string } {
+  const trimmed = raw.trim();
+
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!Array.isArray(parsed)) {
+        return { parsed: [], error: "AppState phải là một JSON array" };
+      }
+      if (parsed.length === 0) {
+        return { parsed: [], error: "AppState array không được rỗng" };
+      }
+      return { parsed };
+    } catch (e: any) {
+      return { parsed: [], error: "JSON không hợp lệ: " + e.message };
+    }
+  }
+
+  if (trimmed.startsWith("{")) {
+    try {
+      const obj = JSON.parse(trimmed);
+      return { parsed: [obj] };
+    } catch (e: any) {
+      return { parsed: [], error: "JSON object không hợp lệ: " + e.message };
+    }
+  }
+
+  if (trimmed.includes("=")) {
+    const converted = cookieStringToAppState(trimmed);
+    if (converted.length === 0) {
+      return { parsed: [], error: "Không thể đọc cookie string" };
+    }
+    logger.info({ count: converted.length }, "Converted cookie string to AppState");
+    return { parsed: converted };
+  }
+
+  return {
+    parsed: [],
+    error:
+      'Định dạng không hợp lệ. Cần JSON array ([{...},...]) hoặc cookie string (c_user=xxx; xs=xxx; ...)',
+  };
+}
 
 router.get("/bot/status", (_req, res) => {
   res.json({
@@ -25,14 +101,12 @@ router.post("/bot/start", async (req, res) => {
 
   try {
     if (appState) {
-      let parsed: any[];
-      try {
-        parsed = JSON.parse(appState);
-        if (!Array.isArray(parsed)) throw new Error("AppState phải là một JSON array");
-      } catch (parseErr: any) {
-        res.status(400).json({ error: "AppState JSON không hợp lệ: " + parseErr.message });
+      const { parsed, error } = parseAppState(appState);
+      if (error) {
+        res.status(400).json({ error });
         return;
       }
+      logger.info({ appStateEntries: parsed.length }, "Starting bot with AppState");
       await startBot({ type: "appstate", appState: parsed });
     } else if (email && password) {
       await startBot({ type: "credentials", email, password });
