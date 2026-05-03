@@ -71,23 +71,31 @@ function startPolling(fbApi: any, myUserID: string) {
     if (stopSignal) return;
 
     try {
+      // Use deprecated Mercury API — more reliable from server IPs than GraphQL batch
       const threads: any[] = await new Promise((resolve, reject) => {
-        fbApi.getThreadList(20, null, ["INBOX"], (err: any, list: any[]) => {
+        fbApi.getThreadListDeprecated(0, 20, "inbox", (err: any, list: any[]) => {
           if (err) reject(err);
           else resolve(list ?? []);
         });
       });
+
+      logger.info({ threadCount: threads.length }, "Poll: fetched threads");
 
       for (const thread of threads) {
         if (stopSignal) break;
         const threadId: string = thread.threadID;
         const lastSeen = lastSeenTimestamp.get(threadId) ?? 0;
 
-        // getThreadHistory to fetch recent messages
+        // Use deprecated Mercury thread history API
         const messages: any[] = await new Promise((resolve, reject) => {
-          fbApi.getThreadHistory(threadId, 5, undefined, (err: any, history: any[]) => {
-            if (err) reject(err);
-            else resolve(history ?? []);
+          fbApi.getThreadHistoryDeprecated(threadId, 5, undefined, (err: any, history: any[]) => {
+            if (err) {
+              // Non-fatal: skip this thread
+              logger.warn({ threadId, err: err?.error ?? String(err) }, "Could not fetch thread history");
+              resolve([]);
+            } else {
+              resolve(history ?? []);
+            }
           });
         });
 
@@ -95,14 +103,20 @@ function startPolling(fbApi: any, myUserID: string) {
           if (stopSignal) break;
           const ts: number = msg.timestamp ? Number(msg.timestamp) : 0;
           if (ts <= lastSeen) continue;
-          if (msg.senderID === myUserID) continue; // skip own messages
+          if (msg.senderID === myUserID) continue;
           if (!msg.body?.trim()) continue;
 
           lastSeenTimestamp.set(threadId, Math.max(lastSeen, ts));
-          await handleMessage(fbApi, threadId, msg.body, msg.senderName ?? "người dùng", msg.senderID, msg.messageID ?? `${threadId}-${ts}`);
+          await handleMessage(
+            fbApi,
+            threadId,
+            msg.body,
+            msg.senderName ?? "người dùng",
+            msg.senderID,
+            msg.messageID ?? `${threadId}-${ts}`
+          );
         }
 
-        // Update last seen to latest message time
         if (messages.length > 0) {
           const latest = Math.max(...messages.map((m) => Number(m.timestamp ?? 0)));
           if (latest > (lastSeenTimestamp.get(threadId) ?? 0)) {
@@ -111,8 +125,9 @@ function startPolling(fbApi: any, myUserID: string) {
         }
       }
     } catch (err: any) {
-      logger.error({ err: err?.message ?? String(err) }, "Polling error");
-      if (String(err).includes("Not logged in") || String(err?.error ?? "").includes("Not logged in")) {
+      const msg = err?.error ?? err?.message ?? String(err);
+      logger.error({ err: msg }, "Polling error");
+      if (String(msg).toLowerCase().includes("not logged in") || String(msg).includes("1357004")) {
         botState.status = "error";
         botState.error = "Phiên đăng nhập hết hạn. Vui lòng dừng bot và đăng nhập lại với cookies mới.";
         api = null;
