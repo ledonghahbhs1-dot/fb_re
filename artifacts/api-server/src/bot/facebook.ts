@@ -3,6 +3,8 @@ import { logger } from "../lib/logger";
 import { bufferLog } from "../lib/logBuffer";
 import { botState } from "./state";
 import { getClaudeReply } from "./claude";
+import * as fs from "fs";
+import * as path from "path";
 
 // Helper: log to both pino and the in-memory buffer visible in the dashboard
 function blog(level: "info" | "warn" | "error", data: Record<string, any>, msg: string) {
@@ -12,6 +14,34 @@ function blog(level: "info" | "warn" | "error", data: Record<string, any>, msg: 
 
 const CHROMIUM_PATH =
   "/nix/store/0n9rl5l9syy808xi9bk4f6dhnfrvhkww-playwright-browsers-chromium/chromium-1080/chrome-linux/chrome";
+
+// Persisted browser state (cookies + localStorage incl. E2EE keys)
+const BROWSER_STATE_PATH = path.join(process.cwd(), "dist", "browser-state.json");
+
+function loadBrowserState(): object | null {
+  try {
+    if (fs.existsSync(BROWSER_STATE_PATH)) {
+      const raw = fs.readFileSync(BROWSER_STATE_PATH, "utf8");
+      const state = JSON.parse(raw);
+      blog("info", { path: BROWSER_STATE_PATH }, "Loaded saved browser state");
+      return state;
+    }
+  } catch (e) {
+    blog("warn", { err: String(e) }, "Could not load browser state — will use raw cookies");
+  }
+  return null;
+}
+
+async function saveBrowserState(ctx: BrowserContext): Promise<void> {
+  try {
+    const state = await ctx.storageState();
+    fs.mkdirSync(path.dirname(BROWSER_STATE_PATH), { recursive: true });
+    fs.writeFileSync(BROWSER_STATE_PATH, JSON.stringify(state));
+    blog("info", {}, "Browser state saved (cookies + E2EE keys)");
+  } catch (e) {
+    blog("warn", { err: String(e) }, "Could not save browser state");
+  }
+}
 
 let browser: Browser | null = null;
 let bContext: BrowserContext | null = null;
@@ -389,6 +419,20 @@ async function scrapeConversationDOM(page: Page): Promise<void> {
     };
   }, sessionUID);
 
+  // ── Detect login overlay — Facebook shows login form when session expires ──
+  const loginLabels = ["email or phone", "password", "email or phone number"];
+  const isLoginPage = result.uniqueLabels.some((lb: string) =>
+    loginLabels.some((l) => lb.toLowerCase().includes(l))
+  );
+  if (isLoginPage) {
+    blog("error", { uniqueLabels: result.uniqueLabels }, "Login overlay detected — cookies expired or invalid!");
+    botState.status = "error";
+    botState.error = "Phiên đăng nhập hết hạn. Vui lòng vào Settings → dừng bot → cập nhật cookies mới → khởi động lại.";
+    stopSignal = true;
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    return;
+  }
+
   blog("info", {
     threadID: result.threadID,
     isE2EE: result.isE2EE,
@@ -527,21 +571,47 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
     executablePath: CHROMIUM_PATH,
     headless: true,
     args: [
-      "--no-sandbox", "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled",
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-blink-features=AutomationControlled",
       "--disable-gpu",
+      "--disable-infobars",
+      "--disable-extensions",
+      "--no-first-run",
+      "--ignore-certificate-errors",
     ],
   });
 
+  // Try to load saved browser state (contains cookies + E2EE keys from last session)
+  const savedState = loadBrowserState();
+
   bContext = await browser.newContext({
     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    locale: "en-US",
+    locale: "vi-VN",
     viewport: { width: 1280, height: 800 },
-    extraHTTPHeaders: { "Accept-Language": "en-US,en;q=0.9" },
+    extraHTTPHeaders: { "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7" },
+    ...(savedState ? { storageState: savedState as any } : {}),
+  });
+
+  // Hide all Playwright/automation indicators so Facebook doesn't detect the bot
+  await bContext.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => false });
+    Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, "languages", { get: () => ["vi-VN", "vi", "en-US", "en"] });
+    // @ts-ignore
+    delete window.__playwright;
+    // @ts-ignore
+    delete window.__pw_manual;
+    // @ts-ignore
+    delete window.__selenium_unwrapped;
+    // @ts-ignore
+    if (!window.chrome) window.chrome = { runtime: {} };
   });
 
   if (credentials.type === "appstate") {
-    // Inject cookies for BOTH facebook.com AND messenger.com
+    // Always inject the user's fresh cookies on top of any saved state.
+    // This ensures the latest tokens are used even if saved state has older cookies.
     const cookiesBases = credentials.appState.map((c: any) => ({
       name: c.key,
       value: c.value,
@@ -551,12 +621,10 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
       secure: c.secure ?? true,
       sameSite: "None" as const,
     }));
-
     const fbCookies = cookiesBases.map((c) => ({ ...c, domain: ".facebook.com" }));
     const msgrCookies = cookiesBases.map((c) => ({ ...c, domain: ".messenger.com" }));
-
     await bContext.addCookies([...fbCookies, ...msgrCookies]);
-    blog("info", { count: fbCookies.length }, "Cookies injected for facebook.com + messenger.com");
+    blog("info", { count: fbCookies.length, hasSavedState: !!savedState }, "Cookies injected");
   }
 
   bPage = await bContext.newPage();
@@ -564,19 +632,27 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
   // Set up interceptors BEFORE any navigation
   await setupInterceptor(bPage);
 
-  // Step 1: Quick visit to facebook.com to establish session
-  blog("info", {}, "Step 1: Establishing Facebook session...");
-  await bPage.goto("https://www.facebook.com/", { waitUntil: "domcontentloaded", timeout: 30000 });
+  // Navigate to facebook.com/messages/ to load the session
+  blog("info", {}, "Navigating to facebook.com/messages/...");
+  await bPage.goto("https://www.facebook.com/messages/", {
+    waitUntil: "domcontentloaded",
+    timeout: 30000,
+  });
 
   const fbUrl = bPage.url();
-  blog("info", { url: fbUrl }, "Facebook navigation result");
+  blog("info", { url: fbUrl }, "Navigation result");
 
   if (fbUrl.includes("checkpoint")) {
     throw new Error("Tài khoản đang bị Facebook checkpoint. Vui lòng xác minh trên trình duyệt rồi thử lại với cookies mới.");
   }
   if (fbUrl.includes("/login")) {
+    // Delete stale saved state so next attempt uses fresh cookies
+    try { fs.unlinkSync(BROWSER_STATE_PATH); } catch (_) {}
     throw new Error("Cookie đã hết hạn hoặc không hợp lệ. Vui lòng lấy cookies mới từ trình duyệt.");
   }
+
+  // Wait a bit for React + E2EE keys to initialize
+  await bPage.waitForTimeout(3000);
 
   let uid = await extractUID(bPage);
   if (!uid && credentials.type === "appstate") {
@@ -585,34 +661,19 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
   }
   sessionUID = uid;
 
-  // Step 2: Navigate to messenger.com (Facebook SSO kicks in automatically)
-  blog("info", {}, "Step 2: Navigating to messenger.com...");
-  const msgrResp = await bPage.goto("https://www.messenger.com/", { waitUntil: "domcontentloaded", timeout: 30000 });
-  const msgrUrl = bPage.url();
-  blog("info", { status: msgrResp?.status(), url: msgrUrl }, "Messenger.com navigation result");
-
-  if (msgrUrl.includes("/login") || msgrUrl.includes("facebook.com/login")) {
-    throw new Error("Không đăng nhập được vào messenger.com. Cookie có thể đã hết hạn.");
-  }
-
   const dtsg = await extractDtsg(bPage);
-  if (!dtsg) {
-    blog("warn", {}, "fb_dtsg not found on messenger.com — retrying on facebook.com");
-    await bPage.goto("https://www.facebook.com/messages/", { waitUntil: "domcontentloaded", timeout: 20000 });
-    const dtsg2 = await extractDtsg(bPage);
-    if (!dtsg2) throw new Error("Không thể lấy token bảo mật (fb_dtsg). Cookie có thể không đủ hoặc đã hết hạn.");
-    sessionDtsg = dtsg2;
-  } else {
-    sessionDtsg = dtsg;
-  }
+  if (!dtsg) throw new Error("Không thể lấy token bảo mật (fb_dtsg). Cookie có thể không đủ hoặc đã hết hạn.");
+  sessionDtsg = dtsg;
 
-  blog("info", { uid, dtsgPrefix: sessionDtsg.substring(0, 10) + "...", msgrUrl }, "Session ready on messenger.com");
+  // Save browser state now (cookies + localStorage with E2EE keys)
+  await saveBrowserState(bContext);
+
+  blog("info", { uid, dtsgPrefix: sessionDtsg.substring(0, 10) + "...", url: fbUrl }, "Session ready");
 
   botState.status = "running";
   botState.startedAt = new Date();
   botState.error = null;
 
-  // Start poll loop (reload messenger.com → triggers fresh GraphQL calls → intercepted)
   startPollLoop();
 }
 
