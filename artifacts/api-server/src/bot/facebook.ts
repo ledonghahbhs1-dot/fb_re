@@ -139,17 +139,24 @@ async function processGraphQLText(text: string, source: string) {
   if (candidates.length === 0) return;
 
   for (const item of candidates) {
-    // Log top-level keys to understand structure (especially E2EE responses)
-    if (item && typeof item === "object" && !Array.isArray(item)) {
-      const topKeys = Object.keys(item);
-      blog("info", { source, topKeys }, "GraphQL top-level keys");
-      // Log second-level keys for deeper structure understanding
-      for (const k of topKeys.slice(0, 3)) {
-        const v = item[k];
-        if (v && typeof v === "object") {
-          blog("info", { source, parent: k, childKeys: Object.keys(v).slice(0, 8) }, "GraphQL nested keys");
-        }
-      }
+    if (!item || typeof item !== "object") continue;
+
+    // ── Handle Facebook GraphQL error responses ──
+    // Format: { __ar, error, errorSummary, errorDescription, isNotCritical, payload, ... }
+    // These are NOT fatal — Facebook often returns errors for non-message queries.
+    // We still try to extract data from `payload` if present.
+    if (!Array.isArray(item) && item.error !== undefined) {
+      const isCritical = !item.isNotCritical;
+      blog(isCritical ? "warn" : "info", {
+        source,
+        errorSummary: item.errorSummary ?? item.error,
+        errorDescription: item.errorDescription,
+        hasPayload: !!item.payload,
+      }, isCritical ? "GraphQL error response (critical)" : "GraphQL error response (non-critical, skipping)");
+
+      // Try to salvage data from payload if present
+      if (item.payload) await processDataNode(item.payload, source);
+      continue;
     }
 
     // Format 1: messenger.com — {"data": {"viewer": ...}} or {"data": {"message_thread": ...}}
