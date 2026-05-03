@@ -460,24 +460,34 @@ async function scrapeConversationDOM(page: Page, initOnly = false): Promise<void
       if (msgBody) sentByMsgs.push({ lb: lb.slice(0, 140), msgBody, senderName });
     });
 
-    // ── Detect group chat — check for member count text or group-specific buttons ──
-    // Group chats show "X members" / "X thành viên" in header, or have a "Members" button.
-    // Personal DMs never have these elements.
+    // ── Detect group chat — ONLY check inside the thread header, not the whole page ──
+    // The sidebar has aria-labels with "members" / "thành viên" (Facebook Groups links)
+    // which would cause false positives on DM threads. Scope check to [role="main"] header only.
     let isGroupThread = false;
-    document.querySelectorAll("[aria-label]").forEach((el) => {
-      const lb = (el.getAttribute("aria-label") ?? "").toLowerCase();
-      if (
-        /thành viên|members|participants|nhóm chat|group chat/i.test(lb) &&
-        !/(gửi|send|reply|attach|emoji|like|react)/i.test(lb)
-      ) {
-        isGroupThread = true;
+    const mainEl = document.querySelector('[role="main"]');
+    const headerEl = mainEl?.querySelector("header") ?? mainEl?.querySelector('[role="banner"]');
+    // Check header text for "X members" / "X thành viên"
+    const headerText = headerEl?.textContent ?? "";
+    if (/\d+\s*(thành viên|members)/i.test(headerText)) isGroupThread = true;
+    // Check header aria-labels for group indicators
+    if (!isGroupThread && headerEl) {
+      headerEl.querySelectorAll("[aria-label]").forEach((el) => {
+        const lb = (el.getAttribute("aria-label") ?? "").toLowerCase();
+        if (
+          /thành viên|members|participants|nhóm chat|group chat/i.test(lb) &&
+          !/(gửi|send|reply|attach|emoji|like|react)/i.test(lb)
+        ) {
+          isGroupThread = true;
+        }
+      });
+    }
+    // Fallback: check thread name area specifically (not whole page)
+    if (!isGroupThread && mainEl) {
+      const threadNameArea = mainEl.querySelector('[data-testid="conversation_name"], [aria-label*="Cuộc trò chuyện"], [aria-label*="Conversation"]');
+      if (threadNameArea) {
+        const lb = (threadNameArea.getAttribute("aria-label") ?? "").toLowerCase();
+        if (/thành viên|members|participants|nhóm chat|group chat/i.test(lb)) isGroupThread = true;
       }
-    });
-    // Also check visible text in the header area for "X members" / "X thành viên"
-    if (!isGroupThread) {
-      const mainEl = document.querySelector('[role="main"]');
-      const headerText = mainEl?.querySelector("header")?.textContent ?? "";
-      if (/\d+\s*(thành viên|members)/i.test(headerText)) isGroupThread = true;
     }
 
     // ── Diagnostics: unique aria-labels on page (first 8) ──
