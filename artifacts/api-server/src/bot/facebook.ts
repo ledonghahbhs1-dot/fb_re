@@ -254,18 +254,29 @@ async function handleMessage(
   }
 
   blog("info", { threadId, senderID, body: body.substring(0, 80) }, "Message → Claude");
-  if (!bPage) return;
+  if (!bPage) {
+    blog("warn", { threadId }, "bPage is null — cannot reply");
+    return;
+  }
 
   try {
     const reply = await getClaudeReply(threadId, body, botState.systemPrompt);
+    if (!reply || !reply.trim()) {
+      blog("error", { threadId }, "AI returned empty reply — skipping send");
+      return;
+    }
+    blog("info", { threadId, replyPreview: reply.substring(0, 80) }, "AI reply ready");
     await sendFbMessageUI(bPage, threadId, reply);
     botState.messagesHandled++;
     blog("info", { threadId, senderName }, "Reply sent ✓");
   } catch (err) {
-    blog("error", { err: String(err), threadId }, "Reply failed");
+    blog("error", { err: String(err), threadId }, "Reply failed — sending fallback");
     try {
       await sendFbMessageUI(bPage, threadId, "Xin lỗi, tôi đang gặp sự cố kỹ thuật. Vui lòng thử lại sau.");
-    } catch (_) {}
+      blog("info", { threadId }, "Fallback message sent");
+    } catch (fbErr) {
+      blog("error", { err: String(fbErr), threadId }, "Fallback send also failed");
+    }
   }
 }
 
