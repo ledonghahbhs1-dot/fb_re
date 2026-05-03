@@ -30,6 +30,7 @@ async function buildAll() {
     external: [
       "*.node",
       "fca-unofficial",
+      "@xaviabot/fca-unofficial",
       "sharp",
       "better-sqlite3",
       "sqlite3",

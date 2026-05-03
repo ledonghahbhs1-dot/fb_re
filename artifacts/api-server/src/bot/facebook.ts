@@ -30,11 +30,11 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
   return new Promise((resolve, reject) => {
     let fca: any;
     try {
-      fca = require("fca-unofficial");
+      fca = require("@xaviabot/fca-unofficial");
     } catch (err) {
       botState.status = "error";
-      botState.error = "Không thể load thư viện fca-unofficial";
-      return reject(new Error("Không thể load thư viện fca-unofficial"));
+      botState.error = "Không thể load thư viện @xaviabot/fca-unofficial";
+      return reject(new Error("Không thể load thư viện @xaviabot/fca-unofficial"));
     }
 
     const loginOptions = {
@@ -50,13 +50,18 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
         ? { appState: credentials.appState }
         : { email: credentials.email, password: credentials.password };
 
+    logger.info(
+      { loginType: credentials.type, appStateLen: credentials.type === "appstate" ? credentials.appState.length : 0 },
+      "Attempting Facebook login"
+    );
+
     fca(loginData, loginOptions, (err: any, fbApi: any) => {
       if (err) {
         botState.status = "error";
         const errMsg =
           err.error ?? err.message ?? (typeof err === "string" ? err : JSON.stringify(err));
         botState.error = errMsg;
-        logger.error({ err: errMsg }, "Facebook login failed");
+        logger.error({ err, errMsg, errType: typeof err, errKeys: err ? Object.keys(err) : [] }, "Facebook login failed");
         return reject(new Error(errMsg ?? "Đăng nhập thất bại"));
       }
 
