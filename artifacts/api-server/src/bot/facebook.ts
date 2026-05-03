@@ -467,40 +467,57 @@ async function scrapeConversationDOM(page: Page, initOnly = false): Promise<void
       if (msgBody) sentByMsgs.push({ lb: lb.slice(0, 140), msgBody, senderName });
     });
 
-    // ── Detect group chat — ONLY check inside the thread header, not the whole page ──
-    // The sidebar has aria-labels with "members" / "thành viên" (Facebook Groups links)
-    // which would cause false positives on DM threads. Scope check to [role="main"] header only.
+    // ── Detect group chat — scan [role="main"] only (NOT whole document) ──
+    // The sidebar is [role="navigation"] / [role="complementary"], NOT [role="main"],
+    // so scanning mainEl is safe and won't give false positives from sidebar Groups links.
     let isGroupThread = false;
     let groupDetectReason = "";
     const mainEl = document.querySelector('[role="main"]');
-    const headerEl = mainEl?.querySelector("header") ?? mainEl?.querySelector('[role="banner"]');
-    // Check header text for "X members" / "X thành viên"
-    const headerText = (headerEl?.textContent ?? "").slice(0, 200);
-    if (/\d+\s*(thành viên|members)/i.test(headerText)) {
-      isGroupThread = true;
-      groupDetectReason = `header text: "${headerText.slice(0, 80)}"`;
-    }
-    // Check header aria-labels for group indicators
-    if (!isGroupThread && headerEl) {
-      headerEl.querySelectorAll("[aria-label]").forEach((el) => {
-        const lb = (el.getAttribute("aria-label") ?? "").toLowerCase();
-        if (
-          /thành viên|members|participants|nhóm chat|group chat/i.test(lb) &&
-          !/(gửi|send|reply|attach|emoji|like|react)/i.test(lb)
-        ) {
+
+    if (mainEl) {
+      // Signal 1: any text node with "X thành viên" / "X members" pattern
+      const mainText = mainEl.textContent ?? "";
+      if (/\d+\s*(thành viên|members)/i.test(mainText)) {
+        isGroupThread = true;
+        const m = mainText.match(/\d+\s*(thành viên|members)/i);
+        groupDetectReason = `main text: "${m?.[0]}"`;
+      }
+
+      // Signal 2: aria-labels containing group keywords (within main only)
+      if (!isGroupThread) {
+        mainEl.querySelectorAll("[aria-label]").forEach((el) => {
+          if (isGroupThread) return;
+          const lb = (el.getAttribute("aria-label") ?? "").toLowerCase();
+          // Group-specific keywords — exclude message-action labels
+          if (
+            /thành viên|members|participants|nhóm chat|group chat|rời nhóm|leave group|add people|thêm người/i.test(lb) &&
+            !/(gửi|send|reply|attach|emoji|like|react|sticker|gif|file|audio|video call|gọi)/i.test(lb)
+          ) {
+            isGroupThread = true;
+            groupDetectReason = `main aria-label: "${lb.slice(0, 80)}"`;
+          }
+        });
+      }
+
+      // Signal 3: "Leave group" / "Rời nhóm" button (group-only UI element)
+      if (!isGroupThread) {
+        const leaveBtn = mainEl.querySelector('[aria-label*="Rời nhóm"], [aria-label*="Leave group"], [aria-label*="Leave Group"]');
+        if (leaveBtn) {
           isGroupThread = true;
-          groupDetectReason = `header aria-label: "${lb.slice(0, 80)}"`;
+          groupDetectReason = "leave-group button found";
         }
-      });
-    }
-    // Fallback: check thread name area specifically (not whole page)
-    if (!isGroupThread && mainEl) {
-      const threadNameArea = mainEl.querySelector('[data-testid="conversation_name"], [aria-label*="Cuộc trò chuyện"], [aria-label*="Conversation"]');
-      if (threadNameArea) {
-        const lb = (threadNameArea.getAttribute("aria-label") ?? "").toLowerCase();
-        if (/thành viên|members|participants|nhóm chat|group chat/i.test(lb)) {
-          isGroupThread = true;
-          groupDetectReason = `thread name area aria-label: "${lb.slice(0, 80)}"`;
+      }
+
+      // Signal 4: multiple distinct avatar images in the thread header area
+      // Group chats show 2+ overlapping avatars; DMs show exactly 1
+      if (!isGroupThread) {
+        const headerEl = mainEl.querySelector("header");
+        if (headerEl) {
+          const avatarImgs = headerEl.querySelectorAll("img[src]");
+          if (avatarImgs.length >= 2) {
+            isGroupThread = true;
+            groupDetectReason = `multiple avatars in header: ${avatarImgs.length}`;
+          }
         }
       }
     }
