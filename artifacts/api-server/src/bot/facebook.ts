@@ -296,7 +296,7 @@ async function sendFbMessageUI(page: Page, threadID: string, text: string): Prom
   // DOM events, but Lexical listens to execCommand-triggered InputEvent which
   // properly updates its internal EditorState so the message is non-empty on send.
   const result = await page.evaluate(
-    (selectors: string[], textToType: string) => {
+    ({ selectors, textToType }: { selectors: string[]; textToType: string }) => {
       for (const sel of selectors) {
         const el = document.querySelector(sel) as HTMLElement | null;
         if (!el) continue;
@@ -315,8 +315,7 @@ async function sendFbMessageUI(page: Page, threadID: string, text: string): Prom
       }
       return null;
     },
-    INPUT_SELECTORS,
-    text
+    { selectors: INPUT_SELECTORS, textToType: text }
   );
 
   if (!result) throw new Error("Không tìm thấy ô nhập tin nhắn");
