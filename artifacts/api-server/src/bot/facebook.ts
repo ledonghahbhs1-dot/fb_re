@@ -279,38 +279,51 @@ async function sendFbMessageUI(page: Page, threadID: string, text: string): Prom
     await page.waitForTimeout(2500);
   }
 
-  // Facebook uses a contenteditable Lexical editor div for the message input.
-  // Try multiple selectors to handle both VN and EN locales.
+  // Wait for the Lexical editor to be fully mounted
+  await page.waitForTimeout(1500);
+
+  // Strategy 1: find by aria-placeholder="Aa" (Facebook's Lexical editor placeholder)
+  // Strategy 2: role=textbox + contenteditable
+  // Strategy 3: any contenteditable
   const INPUT_SELECTORS = [
-    '[aria-label*="nhắn tin"]',
-    '[aria-label*="Nhập tin nhắn"]',
-    '[aria-label*="Message"]',
-    '[aria-label*="message"]',
+    '[aria-placeholder="Aa"]',
+    '[aria-label*="Viết"][contenteditable="true"]',
+    '[aria-label*="nhắn"][contenteditable="true"]',
+    '[aria-label*="Message"][contenteditable="true"]',
     '[role="textbox"][contenteditable="true"]',
+    '[contenteditable="true"][data-lexical-editor="true"]',
     '[contenteditable="true"]',
   ];
 
-  // Wait for the Lexical editor to be ready before interacting
-  await page.waitForTimeout(1000);
-
-  let clicked = false;
-  for (const sel of INPUT_SELECTORS) {
-    const loc = page.locator(sel).last();
-    const visible = await loc.isVisible({ timeout: 3000 }).catch(() => false);
-    if (visible) {
-      // Use force:true to bypass Playwright's actionability checks (element may be
-      // technically covered by a thin overlay that doesn't affect real interaction)
-      await loc.click({ timeout: 10000, force: true });
-      clicked = true;
-      break;
+  // Try page.evaluate focus first — most reliable for Lexical
+  const focused = await page.evaluate((selectors: string[]) => {
+    for (const sel of selectors) {
+      const el = document.querySelector(sel) as HTMLElement | null;
+      if (el) {
+        el.focus();
+        el.click();
+        return sel;
+      }
     }
-  }
-  if (!clicked) throw new Error("Không tìm thấy ô nhập tin nhắn");
+    return null;
+  }, INPUT_SELECTORS);
 
-  // Small pause to ensure focus landed, then type
+  if (!focused) {
+    throw new Error("Không tìm thấy ô nhập tin nhắn");
+  }
+
+  blog("info", { threadID, focusedBy: focused }, "Input focused");
+
+  // Pause to let focus settle
   await page.waitForTimeout(300);
+
+  // Also click via Playwright to ensure keyboard events route correctly
+  const loc = page.locator(focused).last();
+  await loc.click({ force: true, timeout: 5000 }).catch(() => {});
+
+  await page.waitForTimeout(200);
   await page.keyboard.press("Control+a");
-  await page.keyboard.type(text, { delay: 15 });
+  await page.keyboard.type(text, { delay: 12 });
   await page.keyboard.press("Enter");
   await page.waitForTimeout(800);
 
@@ -451,15 +464,27 @@ async function scrapeConversationDOM(page: Page, initOnly = false): Promise<void
   if (!threadID) return;
 
   if (initOnly) {
-    // First poll: just mark all visible messages as seen so we don't reply to history
-    let marked = 0;
+    // First poll: mark only OLD messages as seen (suppress history spam).
+    // "Old" = the aria-label timestamp contains a past year (e.g. 2023, 2024, 2025).
+    // Messages without a year (just time or weekday) are treated as recent and
+    // allowed to pass through to the normal reply path on the next poll.
+    const currentYear = new Date().getFullYear();
+    let markedOld = 0;
+    let keptRecent = 0;
     for (const m of result.sentByMsgs as any[]) {
       if (!m.msgBody) continue;
       const msgKey = `dom-${threadID}-${m.msgBody.slice(0, 50)}`;
-      repliedMessageIds.add(msgKey);
-      marked++;
+      const yearMatch = (m.lb as string).match(/\b(20\d{2})\b/);
+      const msgYear = yearMatch ? parseInt(yearMatch[1]) : null;
+      if (msgYear !== null && msgYear < currentYear) {
+        repliedMessageIds.add(msgKey);
+        markedOld++;
+      } else {
+        // Recent message — leave out of repliedMessageIds so next poll handles it
+        keptRecent++;
+      }
     }
-    blog("info", { threadID, marked }, "First poll: existing messages marked as seen (no reply)");
+    blog("info", { threadID, markedOld, keptRecent }, "First poll: old msgs marked seen, recent msgs queued for reply");
     return;
   }
 
