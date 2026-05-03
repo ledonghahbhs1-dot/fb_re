@@ -76,7 +76,15 @@ async function processInterceptedData(text: string) {
   if (stopSignal) return;
   const parsed = parseGraphQLBatchLines(text);
 
+  logger.info({ parsedCount: parsed.length, textLen: text.length }, "Intercepted graphqlbatch response");
+
   for (const item of parsed) {
+    // Log top-level keys to help diagnose structure
+    if (item?.o0) {
+      const dataKeys = Object.keys(item.o0?.data ?? {});
+      logger.info({ dataKeys }, "GraphQL item data keys");
+    }
+
     // Thread list response: viewer.message_threads.nodes
     const threadNodes: any[] =
       item?.o0?.data?.viewer?.message_threads?.nodes ?? [];
