@@ -1,4 +1,4 @@
-import { chromium, Browser, Page, BrowserContext, Route, Request } from "playwright";
+import { chromium, Browser, Page, BrowserContext } from "playwright";
 import { logger } from "../lib/logger";
 import { bufferLog } from "../lib/logBuffer";
 import { botState } from "./state";
@@ -17,7 +17,7 @@ let browser: Browser | null = null;
 let bContext: BrowserContext | null = null;
 let bPage: Page | null = null;
 let stopSignal = false;
-let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Track last processed timestamp per thread
 const lastSeenTimestamp = new Map<string, number>();
@@ -31,7 +31,7 @@ export type LoginCredentials =
   | { type: "appstate"; appState: any[] };
 
 // ---------------------------------------------------------------------------
-// Session helpers
+// Session helpers — work on both facebook.com and messenger.com
 // ---------------------------------------------------------------------------
 
 async function extractDtsg(page: Page): Promise<string> {
@@ -67,63 +67,98 @@ async function extractUID(page: Page): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Process intercepted GraphQL batch responses
+// Process any GraphQL response that may contain message data.
+// Handles multiple response formats:
+//   1. messenger.com /api/graphql/ — plain JSON: {"data":{...}}
+//   2. facebook.com /api/graphqlbatch/ — line-separated: [{o0:{data:{...}}},{status}]
+//   3. Relay response arrays: [{data:{...}},...]
 // ---------------------------------------------------------------------------
 
-function parseGraphQLBatchLines(text: string): any[] {
-  const lines = text.trim().split("\n").filter(Boolean);
-  return lines.flatMap((line) => {
-    // Strip for(;;); prefix
-    const clean = line.replace(/^for\s*\(;;\);\s*/, "");
-    try { return [JSON.parse(clean)]; } catch { return []; }
-  });
+async function processGraphQLText(text: string, source: string) {
+  if (stopSignal) return;
+
+  const clean = text.replace(/^for\s*\(;;\);\s*/, "").trim();
+  if (!clean.startsWith("{") && !clean.startsWith("[")) return;
+
+  // Parse all candidate JSON objects
+  const candidates: any[] = [];
+
+  // Try as single JSON object
+  try {
+    const obj = JSON.parse(clean);
+    candidates.push(obj);
+  } catch {
+    // Try as newline-separated JSON lines
+    for (const line of clean.split("\n")) {
+      const l = line.trim();
+      if (!l.startsWith("{") && !l.startsWith("[")) continue;
+      try { candidates.push(JSON.parse(l)); } catch {}
+    }
+  }
+
+  if (candidates.length === 0) return;
+  blog("info", { source, candidateCount: candidates.length }, "Parsing GraphQL candidates");
+
+  for (const item of candidates) {
+    // Format 1: messenger.com — {"data": {"viewer": ...}} or {"data": {"message_thread": ...}}
+    await processDataNode(item?.data, source);
+
+    // Format 2: graphqlbatch — {"o0": {"data": {...}}}
+    if (item?.o0) await processDataNode(item.o0?.data, source);
+
+    // Format 3: array wrapper — [{"data":{...}}, ...]
+    if (Array.isArray(item)) {
+      for (const el of item) {
+        await processDataNode(el?.data, source);
+        if (el?.o0) await processDataNode(el.o0?.data, source);
+      }
+    }
+  }
 }
 
-async function processInterceptedData(text: string) {
-  if (stopSignal) return;
-  const parsed = parseGraphQLBatchLines(text);
+async function processDataNode(data: any, source: string) {
+  if (!data || stopSignal) return;
 
-  blog("info", { parsedCount: parsed.length, textLen: text.length }, "Intercepted graphqlbatch response");
+  const keys = Object.keys(data);
+  if (keys.length > 0) {
+    blog("info", { keys, source }, "GraphQL data keys found");
+  }
 
-  for (const item of parsed) {
-    // Log top-level keys to help diagnose structure
-    if (item?.o0) {
-      const dataKeys = Object.keys(item.o0?.data ?? {});
-      blog("info", { dataKeys }, "GraphQL item data keys");
-    }
+  // Thread list: viewer.message_threads.nodes
+  const threadNodes: any[] = data?.viewer?.message_threads?.nodes ?? [];
+  if (threadNodes.length > 0) {
+    blog("info", { count: threadNodes.length, source }, "Thread list found");
+  }
 
-    // Thread list response: viewer.message_threads.nodes
-    const threadNodes: any[] =
-      item?.o0?.data?.viewer?.message_threads?.nodes ?? [];
-
-    for (const thread of threadNodes) {
-      const threadID = String(
-        thread?.thread_key?.thread_fbid ?? thread?.thread_key?.other_user_id ?? ""
-      );
-      const threadType: string = thread?.thread_type ?? "ONE_TO_ONE";
-      if (!threadID) continue;
-
-      // Check last message snippet
-      const lastMsgNodes: any[] = thread?.last_message?.nodes ?? [];
-      for (const msg of lastMsgNodes) {
-        await checkAndHandleMsg(msg, threadID, threadType);
-      }
-    }
-
-    // Single thread message response: message_thread.messages.nodes
-    const msgNodes: any[] =
-      item?.o0?.data?.message_thread?.messages?.nodes ?? [];
-    const threadIDFromHistory = String(
-      item?.o0?.data?.message_thread?.thread_key?.thread_fbid ??
-      item?.o0?.data?.message_thread?.thread_key?.other_user_id ?? ""
+  for (const thread of threadNodes) {
+    const threadID = String(
+      thread?.thread_key?.thread_fbid ?? thread?.thread_key?.other_user_id ?? ""
     );
-    const threadTypeFromHistory: string =
-      item?.o0?.data?.message_thread?.thread_type ?? "ONE_TO_ONE";
+    const threadType: string = thread?.thread_type ?? "ONE_TO_ONE";
+    if (!threadID) continue;
 
-    if (msgNodes.length > 0 && threadIDFromHistory) {
-      for (const msg of msgNodes) {
-        await checkAndHandleMsg(msg, threadIDFromHistory, threadTypeFromHistory);
-      }
+    // Messages embedded in thread list
+    const embeddedMsgs: any[] = thread?.messages?.nodes ?? thread?.last_message?.nodes ?? [];
+    for (const msg of embeddedMsgs) {
+      await checkAndHandleMsg(msg, threadID, threadType);
+    }
+  }
+
+  // Single thread history: message_thread.messages.nodes
+  const threadData = data?.message_thread ?? data?.thread;
+  if (threadData) {
+    const threadID = String(
+      threadData?.thread_key?.thread_fbid ?? threadData?.thread_key?.other_user_id ?? ""
+    );
+    const threadType: string = threadData?.thread_type ?? "ONE_TO_ONE";
+    const msgs: any[] = threadData?.messages?.nodes ?? [];
+
+    if (msgs.length > 0) {
+      blog("info", { threadID, msgCount: msgs.length, source }, "Thread messages found");
+    }
+
+    for (const msg of msgs) {
+      await checkAndHandleMsg(msg, threadID, threadType);
     }
   }
 }
@@ -138,21 +173,13 @@ async function checkAndHandleMsg(msg: any, threadID: string, threadType: string)
   const senderId = String(msg.message_sender?.id ?? msg.actor_id ?? "");
   if (senderId === sessionUID) return;
 
-  const body: string =
-    msg.message?.text ?? msg.body ?? msg.snippet ?? "";
+  const body: string = msg.message?.text ?? msg.body ?? "";
   if (!body.trim()) return;
 
   lastSeenTimestamp.set(threadID, Math.max(lastSeen, ts));
 
   const msgId = msg.message_id ?? `${threadID}-${ts}`;
-  await handleMessage(
-    threadID,
-    threadType,
-    body,
-    msg.message_sender?.name ?? "người dùng",
-    senderId,
-    msgId
-  );
+  await handleMessage(threadID, threadType, body, msg.message_sender?.name ?? "người dùng", senderId, msgId);
 }
 
 // ---------------------------------------------------------------------------
@@ -160,18 +187,12 @@ async function checkAndHandleMsg(msg: any, threadID: string, threadType: string)
 // ---------------------------------------------------------------------------
 
 async function handleMessage(
-  threadId: string,
-  threadType: string,
-  body: string,
-  senderName: string,
-  senderID: string,
-  messageId: string
+  threadId: string, threadType: string, body: string,
+  senderName: string, senderID: string, messageId: string
 ) {
   if (repliedMessageIds.has(messageId)) return;
   repliedMessageIds.add(messageId);
-  if (repliedMessageIds.size > 500) {
-    repliedMessageIds.delete(repliedMessageIds.values().next().value!);
-  }
+  if (repliedMessageIds.size > 500) repliedMessageIds.delete(repliedMessageIds.values().next().value!);
 
   if (!botState.autoReplyEnabled) return;
   if (!body.trim()) return;
@@ -181,7 +202,6 @@ async function handleMessage(
   }
 
   blog("info", { threadId, senderID, body: body.substring(0, 80) }, "Message → Claude");
-
   if (!bPage) return;
 
   try {
@@ -192,18 +212,13 @@ async function handleMessage(
   } catch (err) {
     blog("error", { err: String(err), threadId }, "Reply failed");
     try {
-      await sendFbMessage(
-        bPage,
-        threadId,
-        "Xin lỗi, tôi đang gặp sự cố kỹ thuật. Vui lòng thử lại sau.",
-        threadType
-      );
+      await sendFbMessage(bPage, threadId, "Xin lỗi, tôi đang gặp sự cố kỹ thuật. Vui lòng thử lại sau.", threadType);
     } catch (_) {}
   }
 }
 
 // ---------------------------------------------------------------------------
-// Send message via browser fetch (proper Chrome TLS/headers)
+// Send message — works on both messenger.com and facebook.com
 // ---------------------------------------------------------------------------
 
 function genOfflineId(): string {
@@ -212,16 +227,9 @@ function genOfflineId(): string {
   return String((epoch << 22n) | rand);
 }
 
-async function sendFbMessage(
-  page: Page,
-  threadID: string,
-  text: string,
-  threadType: string
-): Promise<void> {
+async function sendFbMessage(page: Page, threadID: string, text: string, threadType: string): Promise<void> {
   const isGroup = threadType === "GROUP";
   const ts = String(Date.now());
-  const offlineId = genOfflineId();
-
   const params: Record<string, string> = {
     client: "mercury",
     fb_dtsg: sessionDtsg,
@@ -229,26 +237,20 @@ async function sendFbMessage(
     action_type: "ma-type:user-generated-message",
     has_attachment: "false",
     message_id: `<${ts}:01:01>`,
-    offline_threading_id: offlineId,
+    offline_threading_id: genOfflineId(),
     source: "source:chat:web",
     body: text,
     timestamp: ts,
   };
-  if (isGroup) {
-    params["thread_fbid"] = threadID;
-  } else {
-    params["other_user_fbid"] = threadID;
-  }
+  if (isGroup) params["thread_fbid"] = threadID;
+  else params["other_user_fbid"] = threadID;
 
   const result = await page.evaluate(
-    async ({ params }: { params: Record<string, string> }) => {
+    async ({ params, origin }: { params: Record<string, string>; origin: string }) => {
       const body = new URLSearchParams(params);
-      const resp = await fetch("https://www.facebook.com/messaging/send/", {
+      const resp = await fetch(`${origin}/messaging/send/`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "X-Requested-With": "XMLHttpRequest",
-        },
+        headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Requested-With": "XMLHttpRequest" },
         body: body.toString(),
         credentials: "include",
       });
@@ -256,119 +258,97 @@ async function sendFbMessage(
       const clean = text.replace(/^for\s*\(;;\);\s*/, "");
       try { return JSON.parse(clean); } catch { return { __raw: text.slice(0, 300), __status: resp.status }; }
     },
-    { params }
+    { params, origin: "https://www.messenger.com" }
   );
 
   if (result?.__raw) {
-    blog("warn", { raw: result.__raw, status: result.__status }, "Send: unexpected response");
+    blog("warn", { raw: result.__raw, status: result.__status }, "Send: unexpected response — trying facebook.com");
+    // Fallback to facebook.com endpoint
+    const result2 = await page.evaluate(
+      async ({ params }: { params: Record<string, string> }) => {
+        const body = new URLSearchParams(params);
+        const resp = await fetch("https://www.facebook.com/messaging/send/", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Requested-With": "XMLHttpRequest" },
+          body: body.toString(),
+          credentials: "include",
+        });
+        const text = await resp.text();
+        const clean = text.replace(/^for\s*\(;;\);\s*/, "");
+        try { return JSON.parse(clean); } catch { return { __raw: text.slice(0, 300), __status: resp.status }; }
+      },
+      { params }
+    );
+    if (result2?.error_results?.length > 0) throw new Error(`Send error: ${JSON.stringify(result2.error_results[0])}`);
+    return;
   }
-  if (result?.error_results?.length > 0) {
-    throw new Error(`Send error: ${JSON.stringify(result.error_results[0])}`);
-  }
+  if (result?.error_results?.length > 0) throw new Error(`Send error: ${JSON.stringify(result.error_results[0])}`);
 }
 
 // ---------------------------------------------------------------------------
-// Route interceptor — captures Facebook's OWN graphqlbatch API calls
+// Interceptor — captures messenger.com GraphQL calls
 // ---------------------------------------------------------------------------
 
 async function setupInterceptor(page: Page) {
-  // Broad listener — logs every Facebook API call so we can find the right endpoint
+  // Intercept messenger.com /api/graphql/ (main message data endpoint)
+  await page.route("**/api/graphql/**", async (route, request) => {
+    try {
+      const response = await route.fetch();
+      const body = await response.text();
+      // messenger.com GraphQL responses are plain JSON (no for(;;); prefix)
+      processGraphQLText(body, request.url()).catch(() => {});
+      await route.fulfill({ response, body });
+    } catch (err: any) {
+      blog("warn", { err: err?.message }, "graphql route error");
+      await route.continue();
+    }
+  });
+
+  // Also capture via response event (catches calls we didn't route)
   page.on("response", async (resp) => {
     const url = resp.url();
-    if (!url.includes("facebook.com")) return;
-    // Only care about XHR/fetch API calls (not images/fonts/scripts)
-    const ct = resp.headers()["content-type"] ?? "";
-    if (!ct.includes("json") && !ct.includes("javascript") && !ct.includes("text/plain")) return;
+    if (!url.includes("messenger.com") && !url.includes("facebook.com")) return;
+    const path = new URL(url).pathname;
+    if (!path.includes("graphql") && !path.includes("messaging")) return;
 
     try {
       const text = await resp.text();
-      const clean = text.replace(/^for\s*\(;;\);\s*/, "");
-      // Only log if it looks like it has message-related data
-      if (
-        clean.includes("message_threads") ||
-        clean.includes("message_thread") ||
-        clean.includes("messenger") ||
-        clean.includes("thread_key") ||
-        clean.includes("graphqlbatch") ||
-        clean.includes("graphql")
-      ) {
-        const path = new URL(url).pathname;
-        blog("info", { path, len: text.length }, "FB API call with message data");
-        processInterceptedData(clean).catch(() => {});
-      }
+      processGraphQLText(text, path).catch(() => {});
     } catch (_) {}
   });
 
-  // Also keep specific route interceptor for graphqlbatch
-  await page.route("**/api/graphqlbatch/**", async (route: Route, _request: Request) => {
-    try {
-      const response = await route.fetch();
-      const body = await response.text();
-      processInterceptedData(body).catch((err) =>
-        blog("warn", { err: err?.message }, "processInterceptedData error")
-      );
-      await route.fulfill({ response, body });
-    } catch (err: any) {
-      blog("warn", { err: err?.message }, "Interceptor fetch error");
-      await route.continue();
-    }
-  });
-
-  // Also intercept the newer /api/graphql/ endpoint (non-batch)
-  await page.route("**/api/graphql/**", async (route: Route, _request: Request) => {
-    try {
-      const response = await route.fetch();
-      const body = await response.text();
-      const clean = body.replace(/^for\s*\(;;\);\s*/, "");
-      if (clean.includes("message_thread") || clean.includes("thread_key")) {
-        blog("info", { len: body.length }, "Intercepted /api/graphql/ with thread data");
-        processInterceptedData(clean).catch(() => {});
-      }
-      await route.fulfill({ response, body });
-    } catch (err: any) {
-      blog("warn", { err: err?.message }, "graphql interceptor error");
-      await route.continue();
-    }
-  });
-
-  blog("info", {}, "Interceptors registered (graphqlbatch + graphql + response listener)");
+  blog("info", {}, "messenger.com interceptors registered");
 }
 
 // ---------------------------------------------------------------------------
-// Reload loop — triggers Facebook to fetch fresh message data
+// Poll loop — reload messenger.com to trigger fresh GraphQL fetches
 // ---------------------------------------------------------------------------
 
-function startReloadLoop() {
-  async function doReload() {
+function startPollLoop() {
+  async function doPoll() {
     if (stopSignal || !bPage) return;
 
     try {
-      await bPage.reload({ waitUntil: "domcontentloaded", timeout: 20000 });
-      // Refresh dtsg after reload
+      // Reload the messenger.com page to trigger fresh API calls
+      await bPage.reload({ waitUntil: "domcontentloaded", timeout: 25000 });
+      // Refresh tokens after reload
       const dtsg = await extractDtsg(bPage);
       if (dtsg) sessionDtsg = dtsg;
+      blog("info", { url: bPage.url() }, "Poll reload done");
     } catch (err: any) {
       const msg = err?.message ?? String(err);
-      blog("error", { err: msg }, "Reload error");
-
-      const fatal =
-        msg.includes("Target closed") ||
-        msg.includes("browser has been closed") ||
-        msg.includes("Navigation failed");
-
-      if (fatal) {
+      blog("error", { err: msg }, "Poll reload error");
+      if (msg.includes("Target closed") || msg.includes("browser has been closed")) {
         botState.status = "error";
         botState.error = "Browser gặp lỗi. Vui lòng dừng và khởi động lại bot.";
         return;
       }
     }
 
-    if (!stopSignal) {
-      reloadTimer = setTimeout(doReload, 5000);
-    }
+    if (!stopSignal) pollTimer = setTimeout(doPoll, 5000);
   }
 
-  reloadTimer = setTimeout(doReload, 5000);
+  pollTimer = setTimeout(doPoll, 5000);
 }
 
 // ---------------------------------------------------------------------------
@@ -381,7 +361,7 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
   }
 
   stopSignal = false;
-  if (reloadTimer) { clearTimeout(reloadTimer); reloadTimer = null; }
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   lastSeenTimestamp.clear();
   repliedMessageIds.clear();
   botState.status = "connecting";
@@ -395,68 +375,55 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
     executablePath: CHROMIUM_PATH,
     headless: true,
     args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-blink-features=AutomationControlled",
+      "--no-sandbox", "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled",
       "--disable-gpu",
     ],
   });
 
   bContext = await browser.newContext({
-    userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     locale: "en-US",
     viewport: { width: 1280, height: 800 },
     extraHTTPHeaders: { "Accept-Language": "en-US,en;q=0.9" },
   });
 
   if (credentials.type === "appstate") {
-    const cookies = credentials.appState.map((c: any) => ({
+    // Inject cookies for BOTH facebook.com AND messenger.com
+    const cookiesBases = credentials.appState.map((c: any) => ({
       name: c.key,
       value: c.value,
-      domain: (c.domain ?? ".facebook.com").replace(/^(?!\.)/, "."),
       path: c.path ?? "/",
       expires: typeof c.expires === "number" && c.expires > 0 ? c.expires : -1,
       httpOnly: c.httpOnly ?? true,
       secure: c.secure ?? true,
       sameSite: "None" as const,
     }));
-    await bContext.addCookies(cookies);
-    blog("info", { count: cookies.length }, "Cookies injected");
+
+    const fbCookies = cookiesBases.map((c) => ({ ...c, domain: ".facebook.com" }));
+    const msgrCookies = cookiesBases.map((c) => ({ ...c, domain: ".messenger.com" }));
+
+    await bContext.addCookies([...fbCookies, ...msgrCookies]);
+    blog("info", { count: fbCookies.length }, "Cookies injected for facebook.com + messenger.com");
   }
 
   bPage = await bContext.newPage();
 
-  // Set up interceptor BEFORE navigating so we capture initial load calls
+  // Set up interceptors BEFORE any navigation
   await setupInterceptor(bPage);
 
-  // Navigate to Facebook messages (triggers thread list API call)
-  blog("info", {}, "Navigating to facebook.com/messages...");
-  const response = await bPage.goto("https://www.facebook.com/messages/", {
-    waitUntil: "domcontentloaded",
-    timeout: 30000,
-  });
+  // Step 1: Quick visit to facebook.com to establish session
+  blog("info", {}, "Step 1: Establishing Facebook session...");
+  await bPage.goto("https://www.facebook.com/", { waitUntil: "domcontentloaded", timeout: 30000 });
 
-  const finalUrl = bPage.url();
-  blog("info", { status: response?.status(), url: finalUrl }, "Navigation result");
+  const fbUrl = bPage.url();
+  blog("info", { url: fbUrl }, "Facebook navigation result");
 
-  if (finalUrl.includes("checkpoint")) {
-    throw new Error(
-      "Tài khoản đang bị Facebook checkpoint. Vui lòng xác minh trên trình duyệt của bạn rồi thử lại với cookies mới."
-    );
+  if (fbUrl.includes("checkpoint")) {
+    throw new Error("Tài khoản đang bị Facebook checkpoint. Vui lòng xác minh trên trình duyệt rồi thử lại với cookies mới.");
   }
-  if (finalUrl.includes("/login")) {
-    throw new Error(
-      "Cookie đã hết hạn hoặc không hợp lệ. Vui lòng lấy cookies mới từ trình duyệt."
-    );
-  }
-
-  const dtsg = await extractDtsg(bPage);
-  if (!dtsg) {
-    throw new Error(
-      "Không thể lấy token bảo mật (fb_dtsg). Cookie có thể không đủ hoặc đã hết hạn."
-    );
+  if (fbUrl.includes("/login")) {
+    throw new Error("Cookie đã hết hạn hoặc không hợp lệ. Vui lòng lấy cookies mới từ trình duyệt.");
   }
 
   let uid = await extractUID(bPage);
@@ -464,23 +431,42 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
     const cUser = credentials.appState.find((c: any) => c.key === "c_user");
     if (cUser) uid = String(cUser.value);
   }
-
-  sessionDtsg = dtsg;
   sessionUID = uid;
 
-  blog("info", { uid, dtsgPrefix: dtsg.substring(0, 10) + "..." }, "Session ready — interceptor active");
+  // Step 2: Navigate to messenger.com (Facebook SSO kicks in automatically)
+  blog("info", {}, "Step 2: Navigating to messenger.com...");
+  const msgrResp = await bPage.goto("https://www.messenger.com/", { waitUntil: "domcontentloaded", timeout: 30000 });
+  const msgrUrl = bPage.url();
+  blog("info", { status: msgrResp?.status(), url: msgrUrl }, "Messenger.com navigation result");
+
+  if (msgrUrl.includes("/login") || msgrUrl.includes("facebook.com/login")) {
+    throw new Error("Không đăng nhập được vào messenger.com. Cookie có thể đã hết hạn.");
+  }
+
+  const dtsg = await extractDtsg(bPage);
+  if (!dtsg) {
+    blog("warn", {}, "fb_dtsg not found on messenger.com — retrying on facebook.com");
+    await bPage.goto("https://www.facebook.com/messages/", { waitUntil: "domcontentloaded", timeout: 20000 });
+    const dtsg2 = await extractDtsg(bPage);
+    if (!dtsg2) throw new Error("Không thể lấy token bảo mật (fb_dtsg). Cookie có thể không đủ hoặc đã hết hạn.");
+    sessionDtsg = dtsg2;
+  } else {
+    sessionDtsg = dtsg;
+  }
+
+  blog("info", { uid, dtsgPrefix: sessionDtsg.substring(0, 10) + "...", msgrUrl }, "Session ready on messenger.com");
 
   botState.status = "running";
   botState.startedAt = new Date();
   botState.error = null;
 
-  // Start reload loop (each reload triggers fresh FB API calls → intercepted)
-  startReloadLoop();
+  // Start poll loop (reload messenger.com → triggers fresh GraphQL calls → intercepted)
+  startPollLoop();
 }
 
 export function stopBot(): void {
   stopSignal = true;
-  if (reloadTimer) { clearTimeout(reloadTimer); reloadTimer = null; }
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   if (browser) {
     browser.close().catch(() => {});
     browser = null;
