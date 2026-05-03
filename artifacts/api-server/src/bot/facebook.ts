@@ -12,11 +12,21 @@ function blog(level: "info" | "warn" | "error", data: Record<string, any>, msg: 
   bufferLog(level, msg, data);
 }
 
-const CHROMIUM_PATH =
-  "/nix/store/0n9rl5l9syy808xi9bk4f6dhnfrvhkww-playwright-browsers-chromium/chromium-1080/chrome-linux/chrome";
+// On Replit (NixOS): set CHROMIUM_PATH env var or it auto-detects via REPL_ID.
+// On Railway Docker (mcr.microsoft.com/playwright image): leave unset → Playwright
+// finds the bundled Chromium automatically (no executablePath needed).
+const CHROMIUM_PATH: string | undefined =
+  process.env.CHROMIUM_PATH ??
+  (process.env.REPL_ID
+    ? "/nix/store/0n9rl5l9syy808xi9bk4f6dhnfrvhkww-playwright-browsers-chromium/chromium-1080/chrome-linux/chrome"
+    : undefined);
 
-// Persisted browser state (cookies + localStorage incl. E2EE keys)
-const BROWSER_STATE_PATH = path.join(process.cwd(), "dist", "browser-state.json");
+// Persisted browser state (cookies + localStorage incl. E2EE keys).
+// On Railway: mount a volume at /data and set STATE_DIR=/data for persistence
+// across restarts. Without a volume, state resets on each deploy.
+const BROWSER_STATE_PATH = process.env.STATE_DIR
+  ? path.join(process.env.STATE_DIR, "browser-state.json")
+  : path.join(process.cwd(), "dist", "browser-state.json");
 
 function loadBrowserState(): object | null {
   try {
@@ -663,7 +673,7 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
   blog("info", {}, "Launching Chromium");
 
   browser = await chromium.launch({
-    executablePath: CHROMIUM_PATH,
+    ...(CHROMIUM_PATH ? { executablePath: CHROMIUM_PATH } : {}),
     headless: true,
     args: [
       "--no-sandbox",
