@@ -257,44 +257,40 @@ async function sendFbMessage(page: Page, threadID: string, text: string, threadT
   if (isGroup) params["thread_fbid"] = threadID;
   else params["other_user_fbid"] = threadID;
 
+  // Always use the current page's own origin to avoid CORS errors.
+  // The page is on facebook.com, so this sends to facebook.com/messaging/send/.
   const result = await page.evaluate(
-    async ({ params, origin }: { params: Record<string, string>; origin: string }) => {
+    async (params: Record<string, string>) => {
+      const origin = window.location.origin; // https://www.facebook.com
       const body = new URLSearchParams(params);
-      const resp = await fetch(`${origin}/messaging/send/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Requested-With": "XMLHttpRequest" },
-        body: body.toString(),
-        credentials: "include",
-      });
-      const text = await resp.text();
-      const clean = text.replace(/^for\s*\(;;\);\s*/, "");
-      try { return JSON.parse(clean); } catch { return { __raw: text.slice(0, 300), __status: resp.status }; }
-    },
-    { params, origin: "https://www.messenger.com" }
-  );
-
-  if (result?.__raw) {
-    blog("warn", { raw: result.__raw, status: result.__status }, "Send: unexpected response — trying facebook.com");
-    // Fallback to facebook.com endpoint
-    const result2 = await page.evaluate(
-      async ({ params }: { params: Record<string, string> }) => {
-        const body = new URLSearchParams(params);
-        const resp = await fetch("https://www.facebook.com/messaging/send/", {
+      try {
+        const resp = await fetch(`${origin}/messaging/send/`, {
           method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Requested-With": "XMLHttpRequest" },
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Requested-With": "XMLHttpRequest",
+          },
           body: body.toString(),
           credentials: "include",
         });
-        const text = await resp.text();
-        const clean = text.replace(/^for\s*\(;;\);\s*/, "");
-        try { return JSON.parse(clean); } catch { return { __raw: text.slice(0, 300), __status: resp.status }; }
-      },
-      { params }
-    );
-    if (result2?.error_results?.length > 0) throw new Error(`Send error: ${JSON.stringify(result2.error_results[0])}`);
-    return;
+        const txt = await resp.text();
+        const clean = txt.replace(/^for\s*\(;;\);\s*/, "");
+        try { return { ok: true, data: JSON.parse(clean), status: resp.status }; }
+        catch { return { ok: false, raw: txt.slice(0, 400), status: resp.status }; }
+      } catch (e: any) {
+        return { ok: false, fetchErr: String(e?.message ?? e), status: 0 };
+      }
+    },
+    params
+  );
+
+  if (!result.ok) {
+    throw new Error(`Send fetch failed: ${result.fetchErr ?? result.raw} (HTTP ${result.status})`);
   }
-  if (result?.error_results?.length > 0) throw new Error(`Send error: ${JSON.stringify(result.error_results[0])}`);
+  if (result.data?.error_results?.length > 0) {
+    throw new Error(`Send API error: ${JSON.stringify(result.data.error_results[0])}`);
+  }
+  blog("info", { threadID, status: result.status }, "Send response OK");
 }
 
 // ---------------------------------------------------------------------------
@@ -348,16 +344,31 @@ async function scrapeConversationDOM(page: Page): Promise<void> {
       msgs.push({ texts, label: label.slice(0, 120), timeHint, isMine });
     }
 
-    // ── Approach 2: scan ALL aria-labels on the page for "Sent by" pattern ──
+    // ── Approach 2: scan ALL aria-labels on the page for "Sent by" / "gửi" pattern ──
+    // aria-label format (Vietnamese): "Nhập, Tin nhắn do [SENDER] gửi lúc [TIME]: [MSG]"
+    // aria-label format (English):    "Press Enter, Message from [SENDER] sent at [TIME]: [MSG]"
+    // My own messages:                "...do bạn gửi..." / "...You sent..."
     const sentByMsgs: any[] = [];
     document.querySelectorAll("[aria-label]").forEach((el) => {
       const lb = el.getAttribute("aria-label") ?? "";
-      if (/sent (a message|by|at)/i.test(lb) || /gửi/i.test(lb)) {
-        const texts = Array.from(el.querySelectorAll('[dir="auto"]'))
-          .map((t) => t.textContent?.trim())
-          .filter(Boolean);
-        if (texts.length > 0) sentByMsgs.push({ lb: lb.slice(0, 120), texts });
-      }
+      if (!(/gửi/i.test(lb) || /sent (a message|by|at)/i.test(lb))) return;
+
+      // Skip my own messages
+      if (/\bdo bạn gửi\b/i.test(lb) || /\byou sent\b/i.test(lb)) return;
+
+      // Extract message body after the last ": "
+      const colonIdx = lb.lastIndexOf(": ");
+      const msgBody = colonIdx >= 0 ? lb.slice(colonIdx + 2).trim() : "";
+
+      // Extract sender name:
+      //   VN: "do [SENDER] gửi lúc"  →  capture between "do " and " gửi"
+      //   EN: "from [SENDER] sent at" →  capture between "from " and " sent"
+      let senderName = "";
+      const vnMatch = lb.match(/\bdo\s+(.+?)\s+gửi\b/i);
+      const enMatch = lb.match(/\bfrom\s+(.+?)\s+sent\b/i);
+      senderName = (vnMatch?.[1] ?? enMatch?.[1] ?? "Người dùng").trim();
+
+      if (msgBody) sentByMsgs.push({ lb: lb.slice(0, 140), msgBody, senderName });
     });
 
     // ── Diagnostics: unique aria-labels on page (first 8) ──
@@ -393,29 +404,29 @@ async function scrapeConversationDOM(page: Page): Promise<void> {
     blog("info", { sample: result.sentByMsgs }, "DOM sentBy messages sample");
   }
 
-  // ── Process sentBy messages (more reliable sender detection) ──
+  // ── Process sentBy messages ──
   const threadID = result.threadID;
-  const threadType = result.isE2EE ? "ONE_TO_ONE" : "ONE_TO_ONE";
   if (!threadID) return;
 
   for (const m of result.sentByMsgs as any[]) {
-    const text = (m.texts as string[]).join(" ").trim();
+    const text: string = m.msgBody;
+    const senderName: string = m.senderName;
     if (!text) continue;
-    // Parse sender from label: "Sent by Name at HH:MM" or "Name sent at..."
-    const senderMatch = m.lb.match(/^(?:sent by |)(.+?)(?:\s+sent| at |\s+lúc)/i);
-    const senderName = senderMatch?.[1]?.trim() ?? "Người dùng";
-    // Skip my own messages by checking if label says "You"
-    if (/\byou\b/i.test(m.lb) || /\bbạn\b/i.test(m.lb)) continue;
 
-    // Use text hash as msgId for dedup (no reliable ID from DOM)
-    const msgKey = `dom-${threadID}-${text.slice(0, 40)}`;
+    // Use cleaned message body for dedup key (not full label with timestamp)
+    const msgKey = `dom-${threadID}-${text.slice(0, 50)}`;
     if (repliedMessageIds.has(msgKey)) continue;
 
     blog("info", { threadID, senderName, text: text.slice(0, 80) }, "DOM: new message detected");
     const ts = Date.now();
     await checkAndHandleMsg(
-      { message: { text }, timestamp_precise: String(ts), message_sender: { id: "0", name: senderName }, message_id: msgKey },
-      threadID, threadType
+      {
+        message: { text },
+        timestamp_precise: String(ts),
+        message_sender: { id: "0", name: senderName },
+        message_id: msgKey,
+      },
+      threadID, "ONE_TO_ONE"
     );
   }
 }
