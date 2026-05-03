@@ -46,8 +46,8 @@ if (replitBaseURL && replitApiKey) {
     baseURL: "https://models.inference.ai.azure.com",
     apiKey: githubToken,
   });
-  defaultModel = AI_MODEL ?? "claude-3-5-sonnet-20241022";
-  logger.info("Claude: using GitHub Models free tier");
+  defaultModel = AI_MODEL ?? "gpt-4o-mini";
+  logger.info({ model: AI_MODEL ?? "gpt-4o-mini" }, "Claude: using GitHub Models free tier");
 } else if (customBaseURL && customApiKey) {
   provider = "openai-compat";
   openaiClient = new OpenAI({ baseURL: customBaseURL, apiKey: customApiKey });
