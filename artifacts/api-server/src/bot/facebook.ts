@@ -42,7 +42,7 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
       selfListen: false,
       listenEvents: true,
       updatePresence: false,
-      forceLogin: false,
+      forceLogin: true,
     };
 
     const loginData =
