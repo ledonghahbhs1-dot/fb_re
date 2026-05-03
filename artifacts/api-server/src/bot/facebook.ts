@@ -1,4 +1,4 @@
-import { chromium, Browser, Page, BrowserContext } from "playwright";
+import { chromium, Browser, Page, BrowserContext, Route, Request } from "playwright";
 import { logger } from "../lib/logger";
 import { botState } from "./state";
 import { getClaudeReply } from "./claude";
@@ -10,9 +10,11 @@ let browser: Browser | null = null;
 let bContext: BrowserContext | null = null;
 let bPage: Page | null = null;
 let stopSignal = false;
-let pollTimer: ReturnType<typeof setTimeout> | null = null;
+let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Track last processed timestamp per thread
 const lastSeenTimestamp = new Map<string, number>();
+// Deduplicate replied messages
 const repliedMessageIds = new Set<string>();
 let sessionUID = "";
 let sessionDtsg = "";
@@ -29,7 +31,7 @@ async function extractDtsg(page: Page): Promise<string> {
   return page.evaluate(() => {
     const scripts = Array.from(document.querySelectorAll("script"));
     for (const s of scripts) {
-      const t = s.textContent ?? "";
+      const t = (s as HTMLScriptElement).textContent ?? "";
       const m =
         t.match(/\["DTSGInitialData",\[\],\{"token":"([^"]+)"/) ||
         t.match(/"token"\s*:\s*"([A-Za-z0-9_\-]{10,}[^"]*)"\s*,\s*"async"/) ||
@@ -45,160 +47,101 @@ async function extractUID(page: Page): Promise<string> {
   return page.evaluate(() => {
     const scripts = Array.from(document.querySelectorAll("script"));
     for (const s of scripts) {
-      const t = s.textContent ?? "";
-      // Facebook embeds USER_ID in many places
+      const t = (s as HTMLScriptElement).textContent ?? "";
       const m =
         t.match(/"USER_ID"\s*:\s*"(\d+)"/) ||
         t.match(/"actorID"\s*:\s*"(\d+)"/) ||
         t.match(/"user_id"\s*:\s*"(\d+)"/) ||
-        t.match(/\["MqttWebConfig",\[\],\{[^}]*"clientID"\s*:\s*"[^"]*",\s*"endpoint"\s*:\s*"[^"]*",\s*"fbid"\s*:\s*"(\d+)"/) ||
-        t.match(/"__bbox".*?"uid"\s*:\s*(\d+)/) ||
         t.match(/,"uid":(\d+),/);
-      if (m?.[1]) return m[1];
-    }
-    // Fallback: try meta tag
-    const meta = document.querySelector('meta[property="al:ios:url"]');
-    if (meta) {
-      const m = meta.getAttribute("content")?.match(/id=(\d+)/);
       if (m?.[1]) return m[1];
     }
     return "";
   });
 }
 
-async function refreshDtsg(page: Page): Promise<void> {
-  try {
-    const dtsg = await extractDtsg(page);
-    if (dtsg) sessionDtsg = dtsg;
-  } catch (_) {}
-}
-
 // ---------------------------------------------------------------------------
-// Facebook API helpers (run via page.evaluate to use browser's HTTP stack)
+// Process intercepted GraphQL batch responses
 // ---------------------------------------------------------------------------
 
-async function fbPost(page: Page, url: string, params: Record<string, string>): Promise<any> {
-  const result = await page.evaluate(
-    async ({ url, params }: { url: string; params: Record<string, string> }) => {
-      const body = new URLSearchParams(params);
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "X-Requested-With": "XMLHttpRequest",
-        },
-        body: body.toString(),
-        credentials: "include",
-      });
-      const text = await resp.text();
-      // Facebook prepends "for (;;);" (with or without spaces) as CSRF protection
-      const clean = text.replace(/^for\s*\(;;\);\s*/, "");
-      try {
-        return JSON.parse(clean);
-      } catch (e) {
-        // Return raw snippet for debugging
-        return { __parseError: true, __raw: text.slice(0, 500), __status: resp.status };
-      }
-    },
-    { url, params }
-  );
-
-  if (result?.__parseError) {
-    logger.warn({ url, status: result.__status, raw: result.__raw }, "fbPost: JSON parse failed");
-    throw new Error(`Facebook returned non-JSON (HTTP ${result.__status}): ${result.__raw?.slice(0, 120)}`);
-  }
-
-  return result;
-}
-
-async function getThreadList(page: Page): Promise<any[]> {
-  const resp = await fbPost(page, "https://www.facebook.com/ajax/mercury/threadlist_info.php", {
-    client: "mercury",
-    fb_dtsg: sessionDtsg,
-    __user: sessionUID,
-    "inbox[offset]": "0",
-    "inbox[limit]": "20",
+function parseGraphQLBatchLines(text: string): any[] {
+  const lines = text.trim().split("\n").filter(Boolean);
+  return lines.flatMap((line) => {
+    // Strip for(;;); prefix
+    const clean = line.replace(/^for\s*\(;;\);\s*/, "");
+    try { return [JSON.parse(clean)]; } catch { return []; }
   });
-  if (resp?.error) {
-    logger.warn({ fbError: resp.error, errorDesc: resp.errorDescription }, "threadlist_info returned error");
-    throw Object.assign(new Error(`Thread list FB error: ${resp.error}`), { fbError: resp.error });
-  }
-  const threads = resp?.payload?.threads ?? [];
-  logger.info({ threadCount: threads.length, hasPayload: !!resp?.payload, keys: resp ? Object.keys(resp) : [] }, "threadlist_info response");
-  return threads;
 }
 
-async function getThreadHistory(page: Page, threadID: string, threadType: string): Promise<any[]> {
-  const isGroup = threadType === "GROUP";
-  const keyType = isGroup ? "thread_fbids" : "user_ids";
-  const form: Record<string, string> = {
-    client: "mercury",
-    fb_dtsg: sessionDtsg,
-    __user: sessionUID,
-    [`messages[${keyType}][${threadID}][offset]`]: "0",
-    [`messages[${keyType}][${threadID}][timestamp]`]: "0",
-    [`messages[${keyType}][${threadID}][limit]`]: "5",
-  };
-  try {
-    const resp = await fbPost(page, "https://www.facebook.com/ajax/mercury/thread_info.php", form);
-    if (resp?.payload?.actions) return resp.payload.actions;
-    if (!isGroup) {
-      // Retry with thread_fbids if user_ids returns nothing
-      const form2 = {
-        ...form,
-        [`messages[thread_fbids][${threadID}][offset]`]: "0",
-        [`messages[thread_fbids][${threadID}][timestamp]`]: "0",
-        [`messages[thread_fbids][${threadID}][limit]`]: "5",
-      };
-      delete form2[`messages[user_ids][${threadID}][offset]`];
-      delete form2[`messages[user_ids][${threadID}][timestamp]`];
-      delete form2[`messages[user_ids][${threadID}][limit]`];
-      const resp2 = await fbPost(page, "https://www.facebook.com/ajax/mercury/thread_info.php", form2);
-      return resp2?.payload?.actions ?? [];
+async function processInterceptedData(text: string) {
+  if (stopSignal) return;
+  const parsed = parseGraphQLBatchLines(text);
+
+  for (const item of parsed) {
+    // Thread list response: viewer.message_threads.nodes
+    const threadNodes: any[] =
+      item?.o0?.data?.viewer?.message_threads?.nodes ?? [];
+
+    for (const thread of threadNodes) {
+      const threadID = String(
+        thread?.thread_key?.thread_fbid ?? thread?.thread_key?.other_user_id ?? ""
+      );
+      const threadType: string = thread?.thread_type ?? "ONE_TO_ONE";
+      if (!threadID) continue;
+
+      // Check last message snippet
+      const lastMsgNodes: any[] = thread?.last_message?.nodes ?? [];
+      for (const msg of lastMsgNodes) {
+        await checkAndHandleMsg(msg, threadID, threadType);
+      }
     }
-  } catch (e: any) {
-    logger.warn({ threadID, err: e?.message ?? String(e) }, "thread_info.php error");
+
+    // Single thread message response: message_thread.messages.nodes
+    const msgNodes: any[] =
+      item?.o0?.data?.message_thread?.messages?.nodes ?? [];
+    const threadIDFromHistory = String(
+      item?.o0?.data?.message_thread?.thread_key?.thread_fbid ??
+      item?.o0?.data?.message_thread?.thread_key?.other_user_id ?? ""
+    );
+    const threadTypeFromHistory: string =
+      item?.o0?.data?.message_thread?.thread_type ?? "ONE_TO_ONE";
+
+    if (msgNodes.length > 0 && threadIDFromHistory) {
+      for (const msg of msgNodes) {
+        await checkAndHandleMsg(msg, threadIDFromHistory, threadTypeFromHistory);
+      }
+    }
   }
-  return [];
 }
 
-function genOfflineId(): string {
-  const epoch = BigInt(Date.now());
-  const rand = BigInt(Math.floor(Math.random() * 0x3fffff));
-  return String((epoch << 22n) | rand);
-}
+async function checkAndHandleMsg(msg: any, threadID: string, threadType: string) {
+  if (!msg || stopSignal) return;
 
-async function sendFbMessage(page: Page, threadID: string, text: string, threadType: string): Promise<void> {
-  const isGroup = threadType === "GROUP";
-  const ts = String(Date.now());
-  const offlineId = genOfflineId();
+  const ts = Number(msg.timestamp_precise ?? msg.timestamp ?? 0);
+  const lastSeen = lastSeenTimestamp.get(threadID) ?? 0;
+  if (ts <= lastSeen) return;
 
-  const params: Record<string, string> = {
-    client: "mercury",
-    fb_dtsg: sessionDtsg,
-    __user: sessionUID,
-    action_type: "ma-type:user-generated-message",
-    has_attachment: "false",
-    message_id: `<${ts}:01:01>`,
-    offline_threading_id: offlineId,
-    source: "source:chat:web",
-    body: text,
-    timestamp: ts,
-  };
-  if (isGroup) {
-    params["thread_fbid"] = threadID;
-  } else {
-    params["other_user_fbid"] = threadID;
-  }
+  const senderId = String(msg.message_sender?.id ?? msg.actor_id ?? "");
+  if (senderId === sessionUID) return;
 
-  const resp = await fbPost(page, "https://www.facebook.com/messaging/send/", params);
-  if (resp?.error_results?.length > 0) {
-    throw new Error(`Send error: ${JSON.stringify(resp.error_results[0])}`);
-  }
+  const body: string =
+    msg.message?.text ?? msg.body ?? msg.snippet ?? "";
+  if (!body.trim()) return;
+
+  lastSeenTimestamp.set(threadID, Math.max(lastSeen, ts));
+
+  const msgId = msg.message_id ?? `${threadID}-${ts}`;
+  await handleMessage(
+    threadID,
+    threadType,
+    body,
+    msg.message_sender?.name ?? "người dùng",
+    senderId,
+    msgId
+  );
 }
 
 // ---------------------------------------------------------------------------
-// Message handler
+// Message handler → Claude reply
 // ---------------------------------------------------------------------------
 
 async function handleMessage(
@@ -234,87 +177,140 @@ async function handleMessage(
   } catch (err) {
     logger.error({ err, threadId }, "Reply failed");
     try {
-      await sendFbMessage(bPage, threadId, "Xin lỗi, tôi đang gặp sự cố kỹ thuật. Vui lòng thử lại sau.", threadType);
+      await sendFbMessage(
+        bPage,
+        threadId,
+        "Xin lỗi, tôi đang gặp sự cố kỹ thuật. Vui lòng thử lại sau.",
+        threadType
+      );
     } catch (_) {}
   }
 }
 
 // ---------------------------------------------------------------------------
-// Polling loop
+// Send message via browser fetch (proper Chrome TLS/headers)
 // ---------------------------------------------------------------------------
 
-function startPolling() {
-  async function poll() {
+function genOfflineId(): string {
+  const epoch = BigInt(Date.now());
+  const rand = BigInt(Math.floor(Math.random() * 0x3fffff));
+  return String((epoch << 22n) | rand);
+}
+
+async function sendFbMessage(
+  page: Page,
+  threadID: string,
+  text: string,
+  threadType: string
+): Promise<void> {
+  const isGroup = threadType === "GROUP";
+  const ts = String(Date.now());
+  const offlineId = genOfflineId();
+
+  const params: Record<string, string> = {
+    client: "mercury",
+    fb_dtsg: sessionDtsg,
+    __user: sessionUID,
+    action_type: "ma-type:user-generated-message",
+    has_attachment: "false",
+    message_id: `<${ts}:01:01>`,
+    offline_threading_id: offlineId,
+    source: "source:chat:web",
+    body: text,
+    timestamp: ts,
+  };
+  if (isGroup) {
+    params["thread_fbid"] = threadID;
+  } else {
+    params["other_user_fbid"] = threadID;
+  }
+
+  const result = await page.evaluate(
+    async ({ params }: { params: Record<string, string> }) => {
+      const body = new URLSearchParams(params);
+      const resp = await fetch("https://www.facebook.com/messaging/send/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        body: body.toString(),
+        credentials: "include",
+      });
+      const text = await resp.text();
+      const clean = text.replace(/^for\s*\(;;\);\s*/, "");
+      try { return JSON.parse(clean); } catch { return { __raw: text.slice(0, 300), __status: resp.status }; }
+    },
+    { params }
+  );
+
+  if (result?.__raw) {
+    logger.warn({ raw: result.__raw, status: result.__status }, "Send: unexpected response");
+  }
+  if (result?.error_results?.length > 0) {
+    throw new Error(`Send error: ${JSON.stringify(result.error_results[0])}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Route interceptor — captures Facebook's OWN graphqlbatch API calls
+// ---------------------------------------------------------------------------
+
+async function setupInterceptor(page: Page) {
+  await page.route("**/api/graphqlbatch/**", async (route: Route, request: Request) => {
+    try {
+      const response = await route.fetch();
+      const body = await response.text();
+
+      // Process async (don't block the response)
+      processInterceptedData(body).catch((err) =>
+        logger.warn({ err: err?.message }, "processInterceptedData error")
+      );
+
+      await route.fulfill({ response, body });
+    } catch (err: any) {
+      logger.warn({ err: err?.message }, "Interceptor fetch error");
+      await route.continue();
+    }
+  });
+  logger.info("GraphQL batch interceptor registered");
+}
+
+// ---------------------------------------------------------------------------
+// Reload loop — triggers Facebook to fetch fresh message data
+// ---------------------------------------------------------------------------
+
+function startReloadLoop() {
+  async function doReload() {
     if (stopSignal || !bPage) return;
 
     try {
-      const threads = await getThreadList(bPage);
-      if (threads.length > 0) {
-        logger.info({ count: threads.length }, "Poll OK");
-      }
-
-      for (const thread of threads) {
-        if (stopSignal) break;
-        const threadID: string = thread.threadID ?? thread.thread_fbid ?? "";
-        const threadType: string = thread.threadType ?? "USER";
-        if (!threadID) continue;
-
-        const lastSeen = lastSeenTimestamp.get(threadID) ?? 0;
-        const messages = await getThreadHistory(bPage, threadID, threadType);
-
-        for (const msg of messages) {
-          if (stopSignal) break;
-          const ts = Number(msg.timestamp ?? 0);
-          if (ts <= lastSeen) continue;
-
-          const senderId: string = (msg.sender_fbid ?? msg.author ?? "").replace("fbid:", "");
-          if (senderId === sessionUID) continue;
-          if (!msg.body?.trim()) continue;
-
-          lastSeenTimestamp.set(threadID, Math.max(lastSeen, ts));
-          await handleMessage(
-            threadID,
-            threadType,
-            msg.body,
-            msg.sender_name ?? "người dùng",
-            senderId,
-            msg.message_id ?? `${threadID}-${ts}`
-          );
-        }
-
-        if (messages.length > 0) {
-          const latest = Math.max(...messages.map((m: any) => Number(m.timestamp ?? 0)));
-          if (latest > (lastSeenTimestamp.get(threadID) ?? 0)) {
-            lastSeenTimestamp.set(threadID, latest);
-          }
-        }
-      }
-
-      // Periodically refresh dtsg token
-      await refreshDtsg(bPage);
+      await bPage.reload({ waitUntil: "domcontentloaded", timeout: 20000 });
+      // Refresh dtsg after reload
+      const dtsg = await extractDtsg(bPage);
+      if (dtsg) sessionDtsg = dtsg;
     } catch (err: any) {
       const msg = err?.message ?? String(err);
-      logger.error({ err: msg }, "Poll error");
+      logger.error({ err: msg }, "Reload error");
 
       const fatal =
-        msg.toLowerCase().includes("not logged in") ||
-        msg.includes("1357004") ||
         msg.includes("Target closed") ||
-        msg.includes("browser has been closed");
+        msg.includes("browser has been closed") ||
+        msg.includes("Navigation failed");
 
       if (fatal) {
         botState.status = "error";
-        botState.error = "Phiên đăng nhập hết hạn hoặc browser gặp lỗi. Vui lòng dừng và khởi động lại bot.";
+        botState.error = "Browser gặp lỗi. Vui lòng dừng và khởi động lại bot.";
         return;
       }
     }
 
     if (!stopSignal) {
-      pollTimer = setTimeout(poll, 5000);
+      reloadTimer = setTimeout(doReload, 5000);
     }
   }
 
-  poll();
+  reloadTimer = setTimeout(doReload, 5000);
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +323,7 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
   }
 
   stopSignal = false;
-  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  if (reloadTimer) { clearTimeout(reloadTimer); reloadTimer = null; }
   lastSeenTimestamp.clear();
   repliedMessageIds.clear();
   botState.status = "connecting";
@@ -335,7 +331,7 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
   botState.startedAt = null;
   botState.messagesHandled = 0;
 
-  logger.info("Launching Chromium for Facebook bot");
+  logger.info("Launching Chromium");
 
   browser = await chromium.launch({
     executablePath: CHROMIUM_PATH,
@@ -369,20 +365,23 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
       sameSite: "None" as const,
     }));
     await bContext.addCookies(cookies);
-    logger.info({ count: cookies.length }, "Cookies injected into browser");
+    logger.info({ count: cookies.length }, "Cookies injected");
   }
 
   bPage = await bContext.newPage();
 
-  logger.info("Navigating to facebook.com...");
-  const response = await bPage.goto("https://www.facebook.com/", {
+  // Set up interceptor BEFORE navigating so we capture initial load calls
+  await setupInterceptor(bPage);
+
+  // Navigate to Facebook messages (triggers thread list API call)
+  logger.info("Navigating to facebook.com/messages...");
+  const response = await bPage.goto("https://www.facebook.com/messages/", {
     waitUntil: "domcontentloaded",
     timeout: 30000,
   });
 
-  const status = response?.status() ?? 0;
   const finalUrl = bPage.url();
-  logger.info({ status, url: finalUrl }, "Facebook navigation result");
+  logger.info({ status: response?.status(), url: finalUrl }, "Navigation result");
 
   if (finalUrl.includes("checkpoint")) {
     throw new Error(
@@ -390,19 +389,19 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
     );
   }
   if (finalUrl.includes("/login")) {
-    throw new Error("Cookie đã hết hạn hoặc không hợp lệ. Vui lòng lấy cookies mới từ trình duyệt.");
+    throw new Error(
+      "Cookie đã hết hạn hoặc không hợp lệ. Vui lòng lấy cookies mới từ trình duyệt."
+    );
   }
 
   const dtsg = await extractDtsg(bPage);
   if (!dtsg) {
     throw new Error(
-      "Không thể lấy token bảo mật (fb_dtsg) từ Facebook. Cookie có thể không đủ hoặc đã hết hạn."
+      "Không thể lấy token bảo mật (fb_dtsg). Cookie có thể không đủ hoặc đã hết hạn."
     );
   }
 
-  // c_user is httpOnly — extract uid from page scripts instead
   let uid = await extractUID(bPage);
-  // Fallback: use the uid from the injected appState cookies
   if (!uid && credentials.type === "appstate") {
     const cUser = credentials.appState.find((c: any) => c.key === "c_user");
     if (cUser) uid = String(cUser.value);
@@ -411,18 +410,19 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
   sessionDtsg = dtsg;
   sessionUID = uid;
 
-  logger.info({ uid, dtsgPrefix: dtsg.substring(0, 10) + "..." }, "Playwright session ready");
+  logger.info({ uid, dtsgPrefix: dtsg.substring(0, 10) + "..." }, "Session ready — interceptor active");
 
   botState.status = "running";
   botState.startedAt = new Date();
   botState.error = null;
 
-  startPolling();
+  // Start reload loop (each reload triggers fresh FB API calls → intercepted)
+  startReloadLoop();
 }
 
 export function stopBot(): void {
   stopSignal = true;
-  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  if (reloadTimer) { clearTimeout(reloadTimer); reloadTimer = null; }
   if (browser) {
     browser.close().catch(() => {});
     browser = null;
