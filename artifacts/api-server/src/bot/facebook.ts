@@ -32,8 +32,34 @@ async function extractDtsg(page: Page): Promise<string> {
       const t = s.textContent ?? "";
       const m =
         t.match(/\["DTSGInitialData",\[\],\{"token":"([^"]+)"/) ||
-        t.match(/"token"\s*:\s*"([A-Za-z0-9_\-]{10,}[^"]*)"/) ||
-        t.match(/name="fb_dtsg"\s+value="([^"]+)"/);
+        t.match(/"token"\s*:\s*"([A-Za-z0-9_\-]{10,}[^"]*)"\s*,\s*"async"/) ||
+        t.match(/name="fb_dtsg"\s+value="([^"]+)"/) ||
+        t.match(/"fb_dtsg"\s*,\s*null\s*,\s*"([^"]+)"/);
+      if (m?.[1]) return m[1];
+    }
+    return "";
+  });
+}
+
+async function extractUID(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const scripts = Array.from(document.querySelectorAll("script"));
+    for (const s of scripts) {
+      const t = s.textContent ?? "";
+      // Facebook embeds USER_ID in many places
+      const m =
+        t.match(/"USER_ID"\s*:\s*"(\d+)"/) ||
+        t.match(/"actorID"\s*:\s*"(\d+)"/) ||
+        t.match(/"user_id"\s*:\s*"(\d+)"/) ||
+        t.match(/\["MqttWebConfig",\[\],\{[^}]*"clientID"\s*:\s*"[^"]*",\s*"endpoint"\s*:\s*"[^"]*",\s*"fbid"\s*:\s*"(\d+)"/) ||
+        t.match(/"__bbox".*?"uid"\s*:\s*(\d+)/) ||
+        t.match(/,"uid":(\d+),/);
+      if (m?.[1]) return m[1];
+    }
+    // Fallback: try meta tag
+    const meta = document.querySelector('meta[property="al:ios:url"]');
+    if (meta) {
+      const m = meta.getAttribute("content")?.match(/id=(\d+)/);
       if (m?.[1]) return m[1];
     }
     return "";
@@ -65,11 +91,23 @@ async function fbPost(page: Page, url: string, params: Record<string, string>): 
         credentials: "include",
       });
       const text = await resp.text();
-      // Facebook prepends "for(;;);" as CSRF protection
-      return JSON.parse(text.startsWith("for(;;);") ? text.slice(9) : text);
+      // Facebook prepends "for (;;);" (with or without spaces) as CSRF protection
+      const clean = text.replace(/^for\s*\(;;\);\s*/, "");
+      try {
+        return JSON.parse(clean);
+      } catch (e) {
+        // Return raw snippet for debugging
+        return { __parseError: true, __raw: text.slice(0, 500), __status: resp.status };
+      }
     },
     { url, params }
   );
+
+  if (result?.__parseError) {
+    logger.warn({ url, status: result.__status, raw: result.__raw }, "fbPost: JSON parse failed");
+    throw new Error(`Facebook returned non-JSON (HTTP ${result.__status}): ${result.__raw?.slice(0, 120)}`);
+  }
+
   return result;
 }
 
@@ -81,8 +119,13 @@ async function getThreadList(page: Page): Promise<any[]> {
     "inbox[offset]": "0",
     "inbox[limit]": "20",
   });
-  if (resp?.error) throw Object.assign(new Error("Thread list error"), { fbError: resp.error });
-  return resp?.payload?.threads ?? [];
+  if (resp?.error) {
+    logger.warn({ fbError: resp.error, errorDesc: resp.errorDescription }, "threadlist_info returned error");
+    throw Object.assign(new Error(`Thread list FB error: ${resp.error}`), { fbError: resp.error });
+  }
+  const threads = resp?.payload?.threads ?? [];
+  logger.info({ threadCount: threads.length, hasPayload: !!resp?.payload, keys: resp ? Object.keys(resp) : [] }, "threadlist_info response");
+  return threads;
 }
 
 async function getThreadHistory(page: Page, threadID: string, threadType: string): Promise<any[]> {
@@ -357,10 +400,13 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
     );
   }
 
-  const uid: string = await bPage.evaluate(() => {
-    const m = document.cookie.match(/c_user=(\d+)/);
-    return m?.[1] ?? "";
-  });
+  // c_user is httpOnly — extract uid from page scripts instead
+  let uid = await extractUID(bPage);
+  // Fallback: use the uid from the injected appState cookies
+  if (!uid && credentials.type === "appstate") {
+    const cUser = credentials.appState.find((c: any) => c.key === "c_user");
+    if (cUser) uid = String(cUser.value);
+  }
 
   sessionDtsg = dtsg;
   sessionUID = uid;
