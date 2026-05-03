@@ -33,12 +33,12 @@ let defaultModel: string;
 if (replitBaseURL && replitApiKey) {
   provider = "anthropic";
   anthropicClient = new Anthropic({ baseURL: replitBaseURL, apiKey: replitApiKey });
-  defaultModel = AI_MODEL ?? "claude-sonnet-4-5";
+  defaultModel = AI_MODEL ?? "claude-sonnet-4-6";
   logger.info("Claude: using Replit AI integration proxy");
 } else if (anthropicKey) {
   provider = "anthropic";
   anthropicClient = new Anthropic({ apiKey: anthropicKey });
-  defaultModel = AI_MODEL ?? "claude-sonnet-4-5";
+  defaultModel = AI_MODEL ?? "claude-sonnet-4-6";
   logger.info("Claude: using direct Anthropic API");
 } else if (githubToken) {
   provider = "openai-compat";
