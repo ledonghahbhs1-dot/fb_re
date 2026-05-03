@@ -573,12 +573,18 @@ async function scrapeConversationDOM(page: Page, initOnly = false): Promise<void
     for (const m of result.sentByMsgs as any[]) {
       if (!m.msgBody) continue;
       const msgKey = `dom-${threadID}-${m.msgBody.slice(0, 50)}`;
-      // Extract what's after "gửi lúc " and before the next ":"
       const lb: string = m.lb ?? "";
-      const tsMatch = lb.match(/gửi lúc\s+(.+?):/i);
+      // BUG FIX: use ": " (colon + space) as delimiter so "15:35 CH: msg" captures
+      // "15:35 CH" instead of stopping at the first ":" inside the time "15:35".
+      const tsMatch = lb.match(/gửi lúc\s+(.+?):\s/i) ?? lb.match(/sent at\s+(.+?):\s/i);
       const ts = tsMatch?.[1]?.trim() ?? "";
-      // Today: pure HH:MM (optionally with "ch" suffix) or "hôm nay"
-      const isToday = /^\d{1,2}:\d{2}(ch|sáng)?$/.test(ts) || /hôm nay/i.test(ts);
+      // BUG FIX: handle optional space before period indicator — "15:35 CH", "3:35 ch",
+      // "3:35 sáng", "3:35chiều", plain "15:35", or "hôm nay".
+      const isToday =
+        /^\d{1,2}:\d{2}(\s*(ch|chiều|sáng|am|pm))?$/i.test(ts) ||
+        /hôm nay/i.test(ts) ||
+        ts === "";   // empty ts = can't determine → treat as today to be safe
+      blog("info", { ts, isToday, msgKey: msgKey.slice(0, 60) }, "initOnly: time check");
       if (isToday) {
         keptRecent++;
       } else {
