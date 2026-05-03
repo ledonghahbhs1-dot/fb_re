@@ -97,9 +97,21 @@ async function processGraphQLText(text: string, source: string) {
   }
 
   if (candidates.length === 0) return;
-  blog("info", { source, candidateCount: candidates.length }, "Parsing GraphQL candidates");
 
   for (const item of candidates) {
+    // Log top-level keys to understand structure (especially E2EE responses)
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      const topKeys = Object.keys(item);
+      blog("info", { source, topKeys }, "GraphQL top-level keys");
+      // Log second-level keys for deeper structure understanding
+      for (const k of topKeys.slice(0, 3)) {
+        const v = item[k];
+        if (v && typeof v === "object") {
+          blog("info", { source, parent: k, childKeys: Object.keys(v).slice(0, 8) }, "GraphQL nested keys");
+        }
+      }
+    }
+
     // Format 1: messenger.com — {"data": {"viewer": ...}} or {"data": {"message_thread": ...}}
     await processDataNode(item?.data, source);
 
@@ -286,6 +298,129 @@ async function sendFbMessage(page: Page, threadID: string, text: string, threadT
 }
 
 // ---------------------------------------------------------------------------
+// DOM scraper — reads decrypted messages directly from the rendered page.
+// Works for both plain and E2EE threads since the browser has already
+// decrypted the content before rendering.
+// ---------------------------------------------------------------------------
+
+interface DomMessage {
+  text: string;
+  isMine: boolean;
+  ts: number;          // epoch ms (0 if unknown)
+  msgKey: string;      // unique key for dedup
+}
+
+async function scrapeConversationDOM(page: Page): Promise<void> {
+  if (stopSignal) return;
+
+  // Wait for React to render — E2EE threads need extra time to decrypt
+  await page.waitForTimeout(1500);
+
+  const result = await page.evaluate((myUID: string) => {
+    const url = window.location.pathname;
+    const threadMatch = url.match(/\/messages\/(?:e2ee\/)?t\/(\d+)/);
+    const threadID = threadMatch?.[1] ?? "";
+    const isE2EE = url.includes("/e2ee/");
+
+    // ── Approach 1: accessibility tree via role="row" ──
+    const rows = Array.from(document.querySelectorAll('[role="row"]'));
+    const msgs: any[] = [];
+
+    for (const row of rows) {
+      // Grab all dir="auto" text nodes (message body)
+      const textEls = Array.from(row.querySelectorAll('[dir="auto"]'));
+      const texts = textEls
+        .map((el) => el.textContent?.trim() ?? "")
+        .filter((t) => t.length > 0 && t.length < 4000);
+      if (texts.length === 0) continue;
+
+      // Aria-label often contains sender name
+      const label = row.getAttribute("aria-label") ?? "";
+
+      // Time element
+      const timeEl = row.querySelector("abbr[title], time[datetime]");
+      const timeHint = timeEl?.getAttribute("title") ?? timeEl?.getAttribute("datetime") ?? "";
+
+      // Heuristic: rows where the container is flex-end are "mine"
+      // We fall back to detecting myUID in label
+      const isMine = label.toLowerCase().includes("you") || label.toLowerCase().includes("bạn");
+
+      msgs.push({ texts, label: label.slice(0, 120), timeHint, isMine });
+    }
+
+    // ── Approach 2: scan ALL aria-labels on the page for "Sent by" pattern ──
+    const sentByMsgs: any[] = [];
+    document.querySelectorAll("[aria-label]").forEach((el) => {
+      const lb = el.getAttribute("aria-label") ?? "";
+      if (/sent (a message|by|at)/i.test(lb) || /gửi/i.test(lb)) {
+        const texts = Array.from(el.querySelectorAll('[dir="auto"]'))
+          .map((t) => t.textContent?.trim())
+          .filter(Boolean);
+        if (texts.length > 0) sentByMsgs.push({ lb: lb.slice(0, 120), texts });
+      }
+    });
+
+    // ── Diagnostics: unique aria-labels on page (first 8) ──
+    const allLabels: string[] = [];
+    document.querySelectorAll("[aria-label]").forEach((el) => {
+      const lb = el.getAttribute("aria-label")?.trim() ?? "";
+      if (lb) allLabels.push(lb.slice(0, 60));
+    });
+    const uniqueLabels = [...new Set(allLabels)].slice(0, 10);
+
+    return {
+      threadID, isE2EE, url,
+      rowCount: rows.length,
+      rowMsgs: msgs.slice(-6),       // last 6 rows
+      sentByCount: sentByMsgs.length,
+      sentByMsgs: sentByMsgs.slice(-4),
+      uniqueLabels,
+    };
+  }, sessionUID);
+
+  blog("info", {
+    threadID: result.threadID,
+    isE2EE: result.isE2EE,
+    rowCount: result.rowCount,
+    sentByCount: result.sentByCount,
+    uniqueLabels: result.uniqueLabels,
+  }, "DOM scrape diagnostics");
+
+  if (result.rowMsgs.length > 0) {
+    blog("info", { sample: result.rowMsgs }, "DOM row messages sample");
+  }
+  if (result.sentByMsgs.length > 0) {
+    blog("info", { sample: result.sentByMsgs }, "DOM sentBy messages sample");
+  }
+
+  // ── Process sentBy messages (more reliable sender detection) ──
+  const threadID = result.threadID;
+  const threadType = result.isE2EE ? "ONE_TO_ONE" : "ONE_TO_ONE";
+  if (!threadID) return;
+
+  for (const m of result.sentByMsgs as any[]) {
+    const text = (m.texts as string[]).join(" ").trim();
+    if (!text) continue;
+    // Parse sender from label: "Sent by Name at HH:MM" or "Name sent at..."
+    const senderMatch = m.lb.match(/^(?:sent by |)(.+?)(?:\s+sent| at |\s+lúc)/i);
+    const senderName = senderMatch?.[1]?.trim() ?? "Người dùng";
+    // Skip my own messages by checking if label says "You"
+    if (/\byou\b/i.test(m.lb) || /\bbạn\b/i.test(m.lb)) continue;
+
+    // Use text hash as msgId for dedup (no reliable ID from DOM)
+    const msgKey = `dom-${threadID}-${text.slice(0, 40)}`;
+    if (repliedMessageIds.has(msgKey)) continue;
+
+    blog("info", { threadID, senderName, text: text.slice(0, 80) }, "DOM: new message detected");
+    const ts = Date.now();
+    await checkAndHandleMsg(
+      { message: { text }, timestamp_precise: String(ts), message_sender: { id: "0", name: senderName }, message_id: msgKey },
+      threadID, threadType
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Interceptor — captures messenger.com GraphQL calls
 // ---------------------------------------------------------------------------
 
@@ -329,12 +464,17 @@ function startPollLoop() {
     if (stopSignal || !bPage) return;
 
     try {
-      // Reload the messenger.com page to trigger fresh API calls
+      // Reload the page to trigger fresh API calls + let E2EE decrypt + render
       await bPage.reload({ waitUntil: "domcontentloaded", timeout: 25000 });
       // Refresh tokens after reload
       const dtsg = await extractDtsg(bPage);
       if (dtsg) sessionDtsg = dtsg;
-      blog("info", { url: bPage.url() }, "Poll reload done");
+      const currentUrl = bPage.url();
+      blog("info", { url: currentUrl }, "Poll reload done");
+
+      // DOM scrape — works for both plain and E2EE threads
+      await scrapeConversationDOM(bPage);
+
     } catch (err: any) {
       const msg = err?.message ?? String(err);
       blog("error", { err: msg }, "Poll reload error");
@@ -345,10 +485,11 @@ function startPollLoop() {
       }
     }
 
-    if (!stopSignal) pollTimer = setTimeout(doPoll, 5000);
+    if (!stopSignal) pollTimer = setTimeout(doPoll, 8000);
   }
 
-  pollTimer = setTimeout(doPoll, 5000);
+  // First poll after a short delay to let the page fully settle
+  pollTimer = setTimeout(doPoll, 6000);
 }
 
 // ---------------------------------------------------------------------------
