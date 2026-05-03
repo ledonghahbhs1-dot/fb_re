@@ -248,6 +248,10 @@ async function handleMessage(
 
   if (!botState.autoReplyEnabled) return;
   if (!body.trim()) return;
+  if (threadType === "GROUP" || threadType === "COMMUNITY") {
+    blog("info", { threadId, threadType }, "Skipping group/community thread (DM-only mode)");
+    return;
+  }
   if (botState.ignoredThreadIds.has(threadId)) {
     blog("info", { threadId }, "Thread ignored");
     return;
@@ -456,6 +460,26 @@ async function scrapeConversationDOM(page: Page, initOnly = false): Promise<void
       if (msgBody) sentByMsgs.push({ lb: lb.slice(0, 140), msgBody, senderName });
     });
 
+    // ── Detect group chat — check for member count text or group-specific buttons ──
+    // Group chats show "X members" / "X thành viên" in header, or have a "Members" button.
+    // Personal DMs never have these elements.
+    let isGroupThread = false;
+    document.querySelectorAll("[aria-label]").forEach((el) => {
+      const lb = (el.getAttribute("aria-label") ?? "").toLowerCase();
+      if (
+        /thành viên|members|participants|nhóm chat|group chat/i.test(lb) &&
+        !/(gửi|send|reply|attach|emoji|like|react)/i.test(lb)
+      ) {
+        isGroupThread = true;
+      }
+    });
+    // Also check visible text in the header area for "X members" / "X thành viên"
+    if (!isGroupThread) {
+      const mainEl = document.querySelector('[role="main"]');
+      const headerText = mainEl?.querySelector("header")?.textContent ?? "";
+      if (/\d+\s*(thành viên|members)/i.test(headerText)) isGroupThread = true;
+    }
+
     // ── Diagnostics: unique aria-labels on page (first 8) ──
     const allLabels: string[] = [];
     document.querySelectorAll("[aria-label]").forEach((el) => {
@@ -466,6 +490,7 @@ async function scrapeConversationDOM(page: Page, initOnly = false): Promise<void
 
     return {
       threadID, isE2EE, url,
+      isGroupThread,
       rowCount: rows.length,
       rowMsgs: msgs.slice(-6),       // last 6 rows
       sentByCount: sentByMsgs.length,
@@ -485,6 +510,12 @@ async function scrapeConversationDOM(page: Page, initOnly = false): Promise<void
     botState.error = "Phiên đăng nhập hết hạn. Vui lòng vào Settings → dừng bot → cập nhật cookies mới → khởi động lại.";
     stopSignal = true;
     if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    return;
+  }
+
+  // ── Skip group/community threads — only reply to personal DMs ──
+  if (result.isGroupThread) {
+    blog("info", { threadID: result.threadID }, "Skipping group thread (DM-only mode)");
     return;
   }
 
