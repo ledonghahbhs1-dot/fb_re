@@ -279,53 +279,77 @@ async function sendFbMessageUI(page: Page, threadID: string, text: string): Prom
     await page.waitForTimeout(2500);
   }
 
-  // Wait for the Lexical editor to be fully mounted
+  // Wait for Lexical editor to fully mount
   await page.waitForTimeout(1500);
 
-  // Strategy 1: find by aria-placeholder="Aa" (Facebook's Lexical editor placeholder)
-  // Strategy 2: role=textbox + contenteditable
-  // Strategy 3: any contenteditable
   const INPUT_SELECTORS = [
     '[aria-placeholder="Aa"]',
+    '[contenteditable="true"][data-lexical-editor="true"]',
     '[aria-label*="Viết"][contenteditable="true"]',
     '[aria-label*="nhắn"][contenteditable="true"]',
-    '[aria-label*="Message"][contenteditable="true"]',
     '[role="textbox"][contenteditable="true"]',
-    '[contenteditable="true"][data-lexical-editor="true"]',
     '[contenteditable="true"]',
   ];
 
-  // Try page.evaluate focus first — most reliable for Lexical
-  const focused = await page.evaluate((selectors: string[]) => {
-    for (const sel of selectors) {
-      const el = document.querySelector(sel) as HTMLElement | null;
-      if (el) {
+  // Focus the input and insert text using execCommand('insertText').
+  // This is REQUIRED for Lexical/React editors — keyboard.type() only fires native
+  // DOM events, but Lexical listens to execCommand-triggered InputEvent which
+  // properly updates its internal EditorState so the message is non-empty on send.
+  const result = await page.evaluate(
+    (selectors: string[], textToType: string) => {
+      for (const sel of selectors) {
+        const el = document.querySelector(sel) as HTMLElement | null;
+        if (!el) continue;
+
         el.focus();
         el.click();
-        return sel;
+
+        // Clear any existing content
+        document.execCommand("selectAll", false);
+        document.execCommand("delete", false);
+
+        // Insert text — this triggers Lexical's onBeforeInput/onInput handlers
+        const ok = document.execCommand("insertText", false, textToType);
+
+        return { sel, ok, len: el.textContent?.length ?? 0 };
       }
-    }
-    return null;
-  }, INPUT_SELECTORS);
+      return null;
+    },
+    INPUT_SELECTORS,
+    text
+  );
 
-  if (!focused) {
-    throw new Error("Không tìm thấy ô nhập tin nhắn");
-  }
+  if (!result) throw new Error("Không tìm thấy ô nhập tin nhắn");
 
-  blog("info", { threadID, focusedBy: focused }, "Input focused");
+  blog("info", { threadID, sel: result.sel, execOk: result.ok, editorLen: result.len }, "Text inserted into editor");
 
-  // Pause to let focus settle
-  await page.waitForTimeout(300);
+  // Give Lexical time to process the InputEvent and update its EditorState
+  await page.waitForTimeout(400);
 
-  // Also click via Playwright to ensure keyboard events route correctly
-  const loc = page.locator(focused).last();
-  await loc.click({ force: true, timeout: 5000 }).catch(() => {});
-
-  await page.waitForTimeout(200);
-  await page.keyboard.press("Control+a");
-  await page.keyboard.type(text, { delay: 12 });
+  // Press Enter to submit (Messenger sends on Enter, not Shift+Enter)
   await page.keyboard.press("Enter");
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(600);
+
+  // Verify the input cleared (= message was submitted, not just newline)
+  const afterLen = await page.evaluate((sel: string) => {
+    const el = document.querySelector(sel) as HTMLElement | null;
+    return el?.textContent?.trim().length ?? 0;
+  }, result.sel);
+
+  if (afterLen > 0) {
+    // Input still has text → Enter created a newline instead of sending.
+    // Try clicking the send button as a fallback.
+    blog("warn", { threadID, afterLen }, "Enter did not send — trying send button");
+    const sendBtn = await page.evaluate(() => {
+      // Facebook send button: role=button near the compose area
+      const btns = Array.from(document.querySelectorAll('[aria-label="Gửi"], [aria-label="Send"]'));
+      const btn = btns[0] as HTMLElement | null;
+      if (btn) { btn.click(); return true; }
+      return false;
+    });
+    if (!sendBtn) await page.keyboard.press("Enter"); // last resort
+    await page.waitForTimeout(600);
+  }
 
   blog("info", { threadID, len: text.length }, "Message sent via UI ✓");
 }
