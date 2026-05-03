@@ -464,27 +464,28 @@ async function scrapeConversationDOM(page: Page, initOnly = false): Promise<void
   if (!threadID) return;
 
   if (initOnly) {
-    // First poll: mark only OLD messages as seen (suppress history spam).
-    // "Old" = the aria-label timestamp contains a past year (e.g. 2023, 2024, 2025).
-    // Messages without a year (just time or weekday) are treated as recent and
-    // allowed to pass through to the normal reply path on the next poll.
-    const currentYear = new Date().getFullYear();
+    // First poll: mark everything as seen EXCEPT messages sent TODAY.
+    // "Today" = timestamp after "gửi lúc" is just HH:MM (no date) or contains "hôm nay".
+    // Messages with weekday names (Thứ...), month names (Tháng), or any year are OLD.
     let markedOld = 0;
     let keptRecent = 0;
     for (const m of result.sentByMsgs as any[]) {
       if (!m.msgBody) continue;
       const msgKey = `dom-${threadID}-${m.msgBody.slice(0, 50)}`;
-      const yearMatch = (m.lb as string).match(/\b(20\d{2})\b/);
-      const msgYear = yearMatch ? parseInt(yearMatch[1]) : null;
-      if (msgYear !== null && msgYear < currentYear) {
+      // Extract what's after "gửi lúc " and before the next ":"
+      const lb: string = m.lb ?? "";
+      const tsMatch = lb.match(/gửi lúc\s+(.+?):/i);
+      const ts = tsMatch?.[1]?.trim() ?? "";
+      // Today: pure HH:MM (optionally with "ch" suffix) or "hôm nay"
+      const isToday = /^\d{1,2}:\d{2}(ch|sáng)?$/.test(ts) || /hôm nay/i.test(ts);
+      if (isToday) {
+        keptRecent++;
+      } else {
         repliedMessageIds.add(msgKey);
         markedOld++;
-      } else {
-        // Recent message — leave out of repliedMessageIds so next poll handles it
-        keptRecent++;
       }
     }
-    blog("info", { threadID, markedOld, keptRecent }, "First poll: old msgs marked seen, recent msgs queued for reply");
+    blog("info", { threadID, markedOld, keptRecent }, "First poll: old msgs marked seen, today's msgs queued for reply");
     return;
   }
 
