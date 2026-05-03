@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { 
   useGetBotStatus, 
   getGetBotStatusQueryKey,
@@ -23,6 +23,8 @@ import {
   Info,
   ChevronDown,
   ChevronUp,
+  Terminal,
+  Trash2,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -59,7 +61,42 @@ export default function Dashboard() {
   
   const [prompt, setPrompt] = useState("");
   const promptInitialized = useRef(false);
-  
+
+  // Live logs
+  interface LogEntry { ts: number; level: string; msg: string; data?: Record<string, any>; }
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const logsEndRef = useRef<HTMLDivElement>(null);
+  const lastLogTs = useRef<number>(0);
+
+  const fetchLogs = useCallback(async () => {
+    try {
+      const url = lastLogTs.current
+        ? `/api/bot/logs?since=${lastLogTs.current}`
+        : `/api/bot/logs`;
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const json = await res.json();
+      const newEntries: LogEntry[] = json.logs ?? [];
+      if (newEntries.length > 0) {
+        lastLogTs.current = newEntries[newEntries.length - 1].ts;
+        setLogs((prev) => {
+          const combined = [...prev, ...newEntries];
+          return combined.slice(-300);
+        });
+      }
+    } catch (_) {}
+  }, []);
+
+  useEffect(() => {
+    fetchLogs();
+    const id = setInterval(fetchLogs, 1500);
+    return () => clearInterval(id);
+  }, [fetchLogs]);
+
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [logs]);
+
   useEffect(() => {
     if (botStatus && !promptInitialized.current) {
       setPrompt(botStatus.systemPrompt || "");
@@ -449,6 +486,61 @@ export default function Dashboard() {
         </div>
 
       </div>
+
+      {/* Live Log Viewer */}
+      <Card className="border-border/50 bg-card/50 backdrop-blur-sm overflow-hidden">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Terminal className="w-4 h-4 text-primary" />
+              Live Logs
+            </CardTitle>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { setLogs([]); lastLogTs.current = 0; }}
+              className="h-7 px-2 text-xs text-muted-foreground"
+            >
+              <Trash2 className="w-3 h-3 mr-1" />
+              Xóa
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="h-48 overflow-y-auto bg-black/80 font-mono text-xs px-3 py-2 space-y-0.5">
+            {logs.length === 0 ? (
+              <div className="text-muted-foreground/50 pt-2">
+                Khởi động bot để xem logs...
+              </div>
+            ) : (
+              logs.map((entry, i) => {
+                const time = new Date(entry.ts).toLocaleTimeString("vi-VN", { hour12: false });
+                const levelColor =
+                  entry.level === "error" ? "text-red-400" :
+                  entry.level === "warn"  ? "text-yellow-400" :
+                  "text-green-400";
+                const dataStr = entry.data && Object.keys(entry.data).length > 0
+                  ? " " + JSON.stringify(entry.data)
+                  : "";
+                return (
+                  <div key={i} className="flex gap-2 leading-5">
+                    <span className="text-muted-foreground/60 shrink-0">{time}</span>
+                    <span className={`shrink-0 uppercase text-[10px] font-bold ${levelColor}`}>
+                      {entry.level.slice(0, 4)}
+                    </span>
+                    <span className="text-gray-200 break-all">
+                      {entry.msg}
+                      <span className="text-muted-foreground/70">{dataStr}</span>
+                    </span>
+                  </div>
+                );
+              })
+            )}
+            <div ref={logsEndRef} />
+          </div>
+        </CardContent>
+      </Card>
+
     </div>
   );
 }

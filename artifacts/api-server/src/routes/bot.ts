@@ -3,6 +3,7 @@ import { botState } from "../bot/state";
 import { startBot, stopBot } from "../bot/facebook";
 import { clearConversation } from "../bot/claude";
 import { logger } from "../lib/logger";
+import { getRecentLogs } from "../lib/logBuffer";
 
 const router: IRouter = Router();
 
@@ -186,6 +187,11 @@ router.post("/bot/clear-conversation", (req, res) => {
   }
   clearConversation(threadId);
   res.json({ success: true, message: "Đã xóa lịch sử trò chuyện" });
+});
+
+router.get("/bot/logs", (req, res) => {
+  const since = req.query.since ? Number(req.query.since) : undefined;
+  res.json({ logs: getRecentLogs(since) });
 });
 
 export default router;

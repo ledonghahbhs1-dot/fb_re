@@ -1,7 +1,14 @@
 import { chromium, Browser, Page, BrowserContext, Route, Request } from "playwright";
 import { logger } from "../lib/logger";
+import { bufferLog } from "../lib/logBuffer";
 import { botState } from "./state";
 import { getClaudeReply } from "./claude";
+
+// Helper: log to both pino and the in-memory buffer visible in the dashboard
+function blog(level: "info" | "warn" | "error", data: Record<string, any>, msg: string) {
+  logger[level](data, msg);
+  bufferLog(level, msg, data);
+}
 
 const CHROMIUM_PATH =
   "/nix/store/0n9rl5l9syy808xi9bk4f6dhnfrvhkww-playwright-browsers-chromium/chromium-1080/chrome-linux/chrome";
@@ -76,13 +83,13 @@ async function processInterceptedData(text: string) {
   if (stopSignal) return;
   const parsed = parseGraphQLBatchLines(text);
 
-  logger.info({ parsedCount: parsed.length, textLen: text.length }, "Intercepted graphqlbatch response");
+  blog("info", { parsedCount: parsed.length, textLen: text.length }, "Intercepted graphqlbatch response");
 
   for (const item of parsed) {
     // Log top-level keys to help diagnose structure
     if (item?.o0) {
       const dataKeys = Object.keys(item.o0?.data ?? {});
-      logger.info({ dataKeys }, "GraphQL item data keys");
+      blog("info", { dataKeys }, "GraphQL item data keys");
     }
 
     // Thread list response: viewer.message_threads.nodes
@@ -169,11 +176,11 @@ async function handleMessage(
   if (!botState.autoReplyEnabled) return;
   if (!body.trim()) return;
   if (botState.ignoredThreadIds.has(threadId)) {
-    logger.info({ threadId }, "Thread ignored");
+    blog("info", { threadId }, "Thread ignored");
     return;
   }
 
-  logger.info({ threadId, senderID, body: body.substring(0, 80) }, "Message → Claude");
+  blog("info", { threadId, senderID, body: body.substring(0, 80) }, "Message → Claude");
 
   if (!bPage) return;
 
@@ -181,9 +188,9 @@ async function handleMessage(
     const reply = await getClaudeReply(threadId, body, botState.systemPrompt);
     await sendFbMessage(bPage, threadId, reply, threadType);
     botState.messagesHandled++;
-    logger.info({ threadId, senderName }, "Reply sent");
+    blog("info", { threadId, senderName }, "Reply sent ✓");
   } catch (err) {
-    logger.error({ err, threadId }, "Reply failed");
+    blog("error", { err: String(err), threadId }, "Reply failed");
     try {
       await sendFbMessage(
         bPage,
@@ -253,7 +260,7 @@ async function sendFbMessage(
   );
 
   if (result?.__raw) {
-    logger.warn({ raw: result.__raw, status: result.__status }, "Send: unexpected response");
+    blog("warn", { raw: result.__raw, status: result.__status }, "Send: unexpected response");
   }
   if (result?.error_results?.length > 0) {
     throw new Error(`Send error: ${JSON.stringify(result.error_results[0])}`);
@@ -265,23 +272,66 @@ async function sendFbMessage(
 // ---------------------------------------------------------------------------
 
 async function setupInterceptor(page: Page) {
-  await page.route("**/api/graphqlbatch/**", async (route: Route, request: Request) => {
+  // Broad listener — logs every Facebook API call so we can find the right endpoint
+  page.on("response", async (resp) => {
+    const url = resp.url();
+    if (!url.includes("facebook.com")) return;
+    // Only care about XHR/fetch API calls (not images/fonts/scripts)
+    const ct = resp.headers()["content-type"] ?? "";
+    if (!ct.includes("json") && !ct.includes("javascript") && !ct.includes("text/plain")) return;
+
+    try {
+      const text = await resp.text();
+      const clean = text.replace(/^for\s*\(;;\);\s*/, "");
+      // Only log if it looks like it has message-related data
+      if (
+        clean.includes("message_threads") ||
+        clean.includes("message_thread") ||
+        clean.includes("messenger") ||
+        clean.includes("thread_key") ||
+        clean.includes("graphqlbatch") ||
+        clean.includes("graphql")
+      ) {
+        const path = new URL(url).pathname;
+        blog("info", { path, len: text.length }, "FB API call with message data");
+        processInterceptedData(clean).catch(() => {});
+      }
+    } catch (_) {}
+  });
+
+  // Also keep specific route interceptor for graphqlbatch
+  await page.route("**/api/graphqlbatch/**", async (route: Route, _request: Request) => {
     try {
       const response = await route.fetch();
       const body = await response.text();
-
-      // Process async (don't block the response)
       processInterceptedData(body).catch((err) =>
-        logger.warn({ err: err?.message }, "processInterceptedData error")
+        blog("warn", { err: err?.message }, "processInterceptedData error")
       );
-
       await route.fulfill({ response, body });
     } catch (err: any) {
-      logger.warn({ err: err?.message }, "Interceptor fetch error");
+      blog("warn", { err: err?.message }, "Interceptor fetch error");
       await route.continue();
     }
   });
-  logger.info("GraphQL batch interceptor registered");
+
+  // Also intercept the newer /api/graphql/ endpoint (non-batch)
+  await page.route("**/api/graphql/**", async (route: Route, _request: Request) => {
+    try {
+      const response = await route.fetch();
+      const body = await response.text();
+      const clean = body.replace(/^for\s*\(;;\);\s*/, "");
+      if (clean.includes("message_thread") || clean.includes("thread_key")) {
+        blog("info", { len: body.length }, "Intercepted /api/graphql/ with thread data");
+        processInterceptedData(clean).catch(() => {});
+      }
+      await route.fulfill({ response, body });
+    } catch (err: any) {
+      blog("warn", { err: err?.message }, "graphql interceptor error");
+      await route.continue();
+    }
+  });
+
+  blog("info", {}, "Interceptors registered (graphqlbatch + graphql + response listener)");
 }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +349,7 @@ function startReloadLoop() {
       if (dtsg) sessionDtsg = dtsg;
     } catch (err: any) {
       const msg = err?.message ?? String(err);
-      logger.error({ err: msg }, "Reload error");
+      blog("error", { err: msg }, "Reload error");
 
       const fatal =
         msg.includes("Target closed") ||
@@ -339,7 +389,7 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
   botState.startedAt = null;
   botState.messagesHandled = 0;
 
-  logger.info("Launching Chromium");
+  blog("info", {}, "Launching Chromium");
 
   browser = await chromium.launch({
     executablePath: CHROMIUM_PATH,
@@ -373,7 +423,7 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
       sameSite: "None" as const,
     }));
     await bContext.addCookies(cookies);
-    logger.info({ count: cookies.length }, "Cookies injected");
+    blog("info", { count: cookies.length }, "Cookies injected");
   }
 
   bPage = await bContext.newPage();
@@ -382,14 +432,14 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
   await setupInterceptor(bPage);
 
   // Navigate to Facebook messages (triggers thread list API call)
-  logger.info("Navigating to facebook.com/messages...");
+  blog("info", {}, "Navigating to facebook.com/messages...");
   const response = await bPage.goto("https://www.facebook.com/messages/", {
     waitUntil: "domcontentloaded",
     timeout: 30000,
   });
 
   const finalUrl = bPage.url();
-  logger.info({ status: response?.status(), url: finalUrl }, "Navigation result");
+  blog("info", { status: response?.status(), url: finalUrl }, "Navigation result");
 
   if (finalUrl.includes("checkpoint")) {
     throw new Error(
@@ -418,7 +468,7 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
   sessionDtsg = dtsg;
   sessionUID = uid;
 
-  logger.info({ uid, dtsgPrefix: dtsg.substring(0, 10) + "..." }, "Session ready — interceptor active");
+  blog("info", { uid, dtsgPrefix: dtsg.substring(0, 10) + "..." }, "Session ready — interceptor active");
 
   botState.status = "running";
   botState.startedAt = new Date();
@@ -439,7 +489,7 @@ export function stopBot(): void {
   }
   botState.status = "stopped";
   botState.error = null;
-  logger.info("Bot stopped");
+  blog("info", {}, "Bot stopped");
 }
 
 export function getFacebookApi() {
