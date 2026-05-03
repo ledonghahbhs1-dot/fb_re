@@ -87,7 +87,15 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
         if (listenErr) {
           logger.error({ err: listenErr }, "Facebook listen error");
           botState.status = "error";
-          botState.error = listenErr.error ?? String(listenErr);
+          api = null;
+          const rawErr = listenErr.error ?? listenErr.res?.error ?? String(listenErr);
+          const errCode = listenErr.res?.error;
+          if (rawErr === "Not logged in" || errCode === 1357004) {
+            botState.error =
+              "Phiên đăng nhập hết hạn (Not logged in). Vui lòng dừng bot, lấy cookies mới từ trình duyệt và khởi động lại.";
+          } else {
+            botState.error = String(rawErr);
+          }
           return;
         }
 
