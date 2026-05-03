@@ -106,7 +106,25 @@ router.post("/bot/start", async (req, res) => {
         res.status(400).json({ error });
         return;
       }
-      logger.info({ appStateEntries: parsed.length }, "Starting bot with AppState");
+
+      // Validate required cookies are present
+      const keys = parsed.map((c: any) => (c.key ?? c.name ?? "").toLowerCase());
+      logger.info({ keys, appStateEntries: parsed.length }, "Parsed AppState keys");
+
+      if (!keys.includes("xs")) {
+        res.status(400).json({
+          error:
+            "Cookie thiếu 'xs' — đây là cookie quan trọng nhất. Vui lòng copy lại đủ cookie từ DevTools (bao gồm xs, c_user, datr).",
+        });
+        return;
+      }
+      if (!keys.includes("c_user")) {
+        res.status(400).json({
+          error: "Cookie thiếu 'c_user' (ID Facebook). Vui lòng copy lại đủ cookie.",
+        });
+        return;
+      }
+
       await startBot({ type: "appstate", appState: parsed });
     } else if (email && password) {
       await startBot({ type: "credentials", email, password });
