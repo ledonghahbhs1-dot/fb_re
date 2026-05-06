@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Cookie API Server"
+version = "1.0.0"
+id = "artifacts/cookie-api"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23311
+
+[services.development]
+run = "pnpm --filter @workspace/cookie-api run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/cookie-api", "run", "build" ]
+publicDir = "artifacts/cookie-api/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23311"
+BASE_PATH = "/"
