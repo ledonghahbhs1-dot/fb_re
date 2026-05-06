@@ -66,7 +66,7 @@ export default function Dashboard() {
   interface LogEntry { ts: number; level: string; msg: string; data?: Record<string, any>; }
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
-  const lastLogTs = useRef<number>(0);
+  const lastLogTs = useRef<number>(Date.now());
 
   const fetchLogs = useCallback(async () => {
     try {
@@ -498,7 +498,7 @@ export default function Dashboard() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => { setLogs([]); lastLogTs.current = 0; }}
+              onClick={() => { setLogs([]); lastLogTs.current = Date.now(); }}
               className="h-7 px-2 text-xs text-muted-foreground"
             >
               <Trash2 className="w-3 h-3 mr-1" />
