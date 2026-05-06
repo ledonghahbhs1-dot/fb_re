@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Trash2, Cookie, MessageSquare, Copy, Check, ChevronDown, ChevronUp, Settings, X } from "lucide-react";
+import { Send, Trash2, Cookie, MessageSquare, Copy, Check, ChevronDown, ChevronUp, Settings, X, Zap, Eye, EyeOff, Loader2 } from "lucide-react";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const API_BASE = BASE ? `${BASE}/api` : "/api";
@@ -36,6 +36,14 @@ export default function ChatPage() {
   const [copied, setCopied] = useState(false);
   const [apiUrl, setApiUrl] = useState("");
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  // Auto-cookie modal
+  const [showAutoModal, setShowAutoModal] = useState(false);
+  const [autoEmail, setAutoEmail] = useState("");
+  const [autoPass, setAutoPass] = useState("");
+  const [showAutoPass, setShowAutoPass] = useState(false);
+  const [autoLoading, setAutoLoading] = useState(false);
+  const [autoError, setAutoError] = useState<string | null>(null);
+
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -117,6 +125,33 @@ export default function ChatPage() {
     }
   }
 
+  async function autoFetchCookies() {
+    if (!autoEmail || !autoPass) return;
+    setAutoLoading(true);
+    setAutoError(null);
+    try {
+      const res = await fetch(`${API_BASE}/auth/fb-cookies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: autoEmail, password: autoPass }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setAutoError(data.error ?? "Lỗi không xác định");
+        return;
+      }
+      setCookies(data.cookie_string);
+      setShowAutoModal(false);
+      setAutoEmail("");
+      setAutoPass("");
+      setShowCookies(true);
+    } catch (e: any) {
+      setAutoError(e?.message ?? "Network error");
+    } finally {
+      setAutoLoading(false);
+    }
+  }
+
   async function copyPythonCode() {
     const code = getPythonCode();
     await navigator.clipboard.writeText(code);
@@ -181,6 +216,14 @@ print("Session đã được xóa.")
 
         {showCookies && (
           <div className="px-4 pb-4 space-y-2">
+            <button
+              onClick={() => { setShowAutoModal(true); setAutoError(null); }}
+              disabled={!!sessionId}
+              className="w-full flex items-center justify-center gap-2 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-600/40 text-blue-400 text-xs font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Zap className="w-3.5 h-3.5" />
+              Tự động lấy Cookie từ Facebook
+            </button>
             <textarea
               value={cookies}
               onChange={(e) => setCookies(e.target.value)}
@@ -413,6 +456,111 @@ print("Session đã được xóa.")
         <span className="text-gray-700">·</span>
         <a href="https://t.me/wolfmodyt" target="_blank" rel="noopener noreferrer" className="text-sky-500 hover:text-sky-400 transition-colors">t.me/wolfmodyt</a>
       </footer>
+
+      {/* Auto-cookie modal */}
+      {showAutoModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="w-full max-w-sm bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl overflow-hidden">
+            {/* Modal header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center">
+                  <Zap className="w-4 h-4 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold">Tự động lấy Cookie</h3>
+                  <p className="text-xs text-gray-500">Server đăng nhập Facebook và trích xuất cookie</p>
+                </div>
+              </div>
+              <button
+                onClick={() => { setShowAutoModal(false); setAutoError(null); }}
+                className="w-7 h-7 rounded-lg hover:bg-gray-800 flex items-center justify-center text-gray-400 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Warning */}
+            <div className="mx-5 mt-4 bg-amber-900/20 border border-amber-700/40 rounded-lg px-3 py-2.5">
+              <p className="text-xs text-amber-400 leading-relaxed">
+                <strong>Lưu ý:</strong> Mật khẩu chỉ dùng để đăng nhập tạm thời, không lưu lại.
+                Nếu tài khoản bật <strong>2FA</strong>, hãy tắt tạm thời trước khi dùng tính năng này.
+              </p>
+            </div>
+
+            {/* Form */}
+            <div className="px-5 py-4 space-y-3">
+              <div>
+                <label className="text-xs text-gray-400 mb-1.5 block">Email / Số điện thoại Facebook</label>
+                <input
+                  type="email"
+                  value={autoEmail}
+                  onChange={(e) => setAutoEmail(e.target.value)}
+                  placeholder="account@example.com"
+                  disabled={autoLoading}
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1.5 block">Mật khẩu</label>
+                <div className="relative">
+                  <input
+                    type={showAutoPass ? "text" : "password"}
+                    value={autoPass}
+                    onChange={(e) => setAutoPass(e.target.value)}
+                    placeholder="••••••••"
+                    disabled={autoLoading}
+                    onKeyDown={(e) => { if (e.key === "Enter") autoFetchCookies(); }}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 pr-10 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAutoPass((v) => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
+                  >
+                    {showAutoPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {autoError && (
+                <div className="bg-red-900/30 border border-red-800/50 rounded-lg px-3 py-2.5 text-xs text-red-400 leading-relaxed">
+                  {autoError}
+                </div>
+              )}
+
+              {autoLoading && (
+                <div className="flex items-center gap-2 text-xs text-blue-400 bg-blue-900/20 border border-blue-800/30 rounded-lg px-3 py-2.5">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" />
+                  <span>Đang đăng nhập Facebook và trích xuất cookie... (~15-30 giây)</span>
+                </div>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="px-5 pb-5 flex gap-2">
+              <button
+                onClick={() => { setShowAutoModal(false); setAutoError(null); }}
+                disabled={autoLoading}
+                className="flex-1 py-2.5 rounded-xl border border-gray-700 text-sm text-gray-400 hover:bg-gray-800 transition-colors disabled:opacity-50"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={autoFetchCookies}
+                disabled={autoLoading || !autoEmail || !autoPass}
+                className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-sm text-white font-medium transition-colors flex items-center justify-center gap-2"
+              >
+                {autoLoading ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Đang lấy...</>
+                ) : (
+                  <><Zap className="w-4 h-4" /> Lấy Cookie</>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
