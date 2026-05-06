@@ -54,12 +54,11 @@ if (replitBaseURL && replitApiKey) {
   defaultModel = AI_MODEL ?? "claude-3-5-sonnet";
   logger.info({ baseURL: customBaseURL }, "Claude: using custom OpenAI-compatible endpoint");
 } else {
-  throw new Error(
-    "Thiếu cấu hình AI. Trên Railway, thêm một trong:\n" +
-    "  • GITHUB_TOKEN  (miễn phí — dùng GitHub Models)\n" +
-    "  • ANTHROPIC_API_KEY  (trả phí — dùng Anthropic trực tiếp)\n" +
-    "  • AI_BASE_URL + AI_API_KEY  (OpenRouter, OpenAI, v.v.)"
+  logger.warn(
+    "Chưa cấu hình AI. Thêm một trong: GITHUB_TOKEN, ANTHROPIC_API_KEY, hoặc AI_BASE_URL + AI_API_KEY. Bot sẽ không trả lời tin nhắn."
   );
+  provider = "anthropic" as Provider;
+  defaultModel = "claude-sonnet-4-6";
 }
 
 const conversationHistory = new Map<string, { role: "user" | "assistant"; content: string }[]>();
