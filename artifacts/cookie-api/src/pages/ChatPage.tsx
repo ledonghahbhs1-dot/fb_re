@@ -365,6 +365,15 @@ print("Session đã được xóa.")
           </div>
         </main>
       </div>
+
+      <footer className="border-t border-gray-800 bg-gray-950 py-3 px-6 flex flex-wrap items-center justify-center gap-4 text-xs text-gray-500">
+        <span>Tạo bởi</span>
+        <a href="https://facebook.com/wolfmodkk" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-400 transition-colors">facebook.com/wolfmodkk</a>
+        <span className="text-gray-700">·</span>
+        <a href="https://youtube.com/@cheatmod796" target="_blank" rel="noopener noreferrer" className="text-red-500 hover:text-red-400 transition-colors">youtube.com/@cheatmod796</a>
+        <span className="text-gray-700">·</span>
+        <a href="https://t.me/wolfmodyt" target="_blank" rel="noopener noreferrer" className="text-sky-500 hover:text-sky-400 transition-colors">t.me/wolfmodyt</a>
+      </footer>
     </div>
   );
 }

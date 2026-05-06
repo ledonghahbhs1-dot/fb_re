@@ -67,6 +67,14 @@ export function Layout({ children }: LayoutProps) {
         <div className="flex-1 p-8 max-w-6xl w-full mx-auto">
           {children}
         </div>
+        <footer className="border-t border-border/50 py-3 px-6 flex flex-wrap items-center justify-center gap-4 text-xs text-muted-foreground/50">
+          <span>Tạo bởi</span>
+          <a href="https://facebook.com/wolfmodkk" target="_blank" rel="noopener noreferrer" className="text-blue-500/70 hover:text-blue-400 transition-colors">facebook.com/wolfmodkk</a>
+          <span>·</span>
+          <a href="https://youtube.com/@cheatmod796" target="_blank" rel="noopener noreferrer" className="text-red-500/70 hover:text-red-400 transition-colors">youtube.com/@cheatmod796</a>
+          <span>·</span>
+          <a href="https://t.me/wolfmodyt" target="_blank" rel="noopener noreferrer" className="text-sky-500/70 hover:text-sky-400 transition-colors">t.me/wolfmodyt</a>
+        </footer>
       </main>
     </div>
   );
