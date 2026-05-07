@@ -12,20 +12,27 @@ const CHROMIUM_PATH: string | undefined =
 
 /**
  * POST /api/auth/fb-cookies
- * Accepts { email, password }
+ * Accepts { email, password } OR { identifier, password }
+ * identifier can be: email, phone number, or Facebook numeric ID
  * Launches a headless browser, logs into Facebook, returns cookies as string.
  */
 router.post("/auth/fb-cookies", async (req, res) => {
-  const { email, password } = req.body as { email?: string; password?: string };
+  const body = req.body as { email?: string; identifier?: string; password?: string };
+  // Support both "email" (legacy) and "identifier" (new - accepts FB ID, phone, email)
+  const identifier = body.identifier ?? body.email;
+  const { password } = body;
 
-  if (!email || !password) {
-    res.status(400).json({ error: "Cần cung cấp email và password" });
+  if (!identifier || !password) {
+    res.status(400).json({ error: "Cần cung cấp email/SĐT/Facebook ID và password" });
     return;
   }
 
+  // Detect if it's a Facebook numeric ID and use phone-style login
+  const isFbId = /^\d{5,20}$/.test(identifier.trim());
+
   let browser;
   try {
-    logger.info({ email }, "Starting Playwright FB login for cookie extraction");
+    logger.info({ identifier: isFbId ? `[FB_ID]${identifier.slice(0,4)}***` : identifier }, "Starting Playwright FB login for cookie extraction");
 
     browser = await chromium.launch({
       headless: true,
@@ -48,10 +55,10 @@ router.post("/auth/fb-cookies", async (req, res) => {
       timeout: 30000,
     });
 
-    // Fill email
+    // Fill email / phone / Facebook ID (m.facebook.com login accepts all three)
     const emailInput = page.locator('input[name="email"], input[type="email"], #m_login_email');
     await emailInput.waitFor({ timeout: 10000 });
-    await emailInput.fill(email);
+    await emailInput.fill(identifier.trim());
 
     // Fill password
     const passInput = page.locator('input[name="pass"], input[type="password"]');
@@ -78,7 +85,7 @@ router.post("/auth/fb-cookies", async (req, res) => {
         pageContent.includes("không đúng") ||
         pageContent.includes("error");
       if (hasError) {
-        res.status(401).json({ error: "Email hoặc mật khẩu không đúng. Vui lòng kiểm tra lại." });
+        res.status(401).json({ error: "Email/SĐT/Facebook ID hoặc mật khẩu không đúng. Vui lòng kiểm tra lại." });
         return;
       }
     }
