@@ -15,7 +15,7 @@ import { logger } from "../lib/logger";
 const replitBaseURL = process.env["AI_INTEGRATIONS_ANTHROPIC_BASE_URL"];
 const replitApiKey  = process.env["AI_INTEGRATIONS_ANTHROPIC_API_KEY"];
 const anthropicKey  = process.env["ANTHROPIC_API_KEY"];
-const githubToken   = process.env["GITHUB_TOKEN"];
+const githubToken   = process.env["GITHUB_TOKEN"] ?? process.env["GITHUB_PERSONAL_ACCESS_TOKEN"];
 const customBaseURL = process.env["AI_BASE_URL"];
 const customApiKey  = process.env["AI_API_KEY"];
 
