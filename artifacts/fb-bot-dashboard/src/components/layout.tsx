@@ -20,13 +20,22 @@ export function Layout({ children }: LayoutProps) {
     { href: "/settings", label: "Settings", icon: Settings },
   ];
 
-  const Sidebar = () => (
+  const Sidebar = ({ isMobile = false }: { isMobile?: boolean }) => (
     <aside className="w-64 border-r border-border/50 bg-card/30 flex flex-col backdrop-blur-xl h-full">
       <div className="h-14 sm:h-16 flex items-center px-4 sm:px-6 border-b border-border/50 gap-3">
         <div className="w-8 h-8 rounded-md bg-primary/10 flex items-center justify-center text-primary flex-shrink-0">
           <MessageSquare className="w-5 h-5" />
         </div>
-        <span className="font-semibold tracking-tight text-foreground/90 truncate">Bot Control</span>
+        <span className="font-semibold tracking-tight text-foreground/90 truncate flex-1">Bot Control</span>
+        {isMobile && (
+          <button
+            onClick={() => setSidebarOpen(false)}
+            className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors flex-shrink-0"
+            aria-label="Đóng menu"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        )}
       </div>
 
       <nav className="flex-1 py-4 sm:py-6 px-3 flex flex-col gap-1">
@@ -75,7 +84,7 @@ export function Layout({ children }: LayoutProps) {
       {sidebarOpen && (
         <div className="md:hidden fixed inset-0 z-50 flex">
           <div className="w-64 flex-shrink-0">
-            <Sidebar />
+            <Sidebar isMobile={true} />
           </div>
           <div
             className="flex-1 bg-black/60 backdrop-blur-sm"

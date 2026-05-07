@@ -625,7 +625,7 @@ export default function Dashboard() {
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          <div className="h-48 overflow-y-auto bg-black/80 font-mono text-xs px-3 py-2 space-y-0.5">
+          <div className="h-48 overflow-y-auto overscroll-y-contain bg-black/80 font-mono text-xs px-3 py-2 space-y-0.5" style={{ touchAction: "pan-y" }}>
             {logs.length === 0 ? (
               <div className="text-muted-foreground/50 pt-2">
                 Khởi động bot để xem logs...
