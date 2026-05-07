@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { botState } from "../bot/state";
-import { startBot, stopBot } from "../bot/facebook";
+import { startBot, stopBot, submit2FACode, TwoFactorRequired } from "../bot/facebook";
 import { clearConversation } from "../bot/claude";
 import { logger } from "../lib/logger";
 import { getRecentLogs } from "../lib/logBuffer";
@@ -140,7 +140,25 @@ router.post("/bot/start", async (req, res) => {
 
     res.json({ success: true, message: "Bot đã kết nối thành công" });
   } catch (err: any) {
+    if (err instanceof TwoFactorRequired || err?.name === "TwoFactorRequired") {
+      res.json({ success: true, requires_2fa: true, message: "Cần nhập mã xác minh 2FA để hoàn tất đăng nhập" });
+      return;
+    }
     res.status(500).json({ error: err.message ?? "Đăng nhập thất bại" });
+  }
+});
+
+router.post("/bot/2fa", async (req, res) => {
+  const { code } = req.body as { code?: string };
+  if (!code?.trim()) {
+    res.status(400).json({ error: "Vui lòng cung cấp mã xác minh 2FA" });
+    return;
+  }
+  try {
+    await submit2FACode(code.trim());
+    res.json({ success: true, message: "Xác minh 2FA thành công. Bot đã kết nối!" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? "Xác minh 2FA thất bại" });
   }
 });
 

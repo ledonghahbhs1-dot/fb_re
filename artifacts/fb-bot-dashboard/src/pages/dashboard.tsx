@@ -26,6 +26,7 @@ import {
   Terminal,
   Trash2,
   ExternalLink,
+  ShieldCheck,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -59,6 +60,8 @@ export default function Dashboard() {
   const [password, setPassword] = useState("");
   const [appState, setAppState] = useState("");
   const [showGuide, setShowGuide] = useState(false);
+  const [twoFACode, setTwoFACode] = useState("");
+  const [is2FASubmitting, setIs2FASubmitting] = useState(false);
   
   const [prompt, setPrompt] = useState("");
   const promptInitialized = useRef(false);
@@ -109,8 +112,12 @@ export default function Dashboard() {
     e.preventDefault();
     if (!identifier || !password) return;
     startBot.mutate({ data: { identifier, password } as any }, {
-      onSuccess: () => {
-        toast({ title: "Đang kết nối Facebook..." });
+      onSuccess: (data: any) => {
+        if (data?.requires_2fa) {
+          toast({ title: "Cần xác minh 2FA", description: "Vui lòng nhập mã OTP từ ứng dụng xác thực hoặc SMS." });
+        } else {
+          toast({ title: "Đang kết nối Facebook..." });
+        }
         queryClient.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
       },
       onError: (err: any) => {
@@ -119,6 +126,31 @@ export default function Dashboard() {
         queryClient.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
       }
     });
+  };
+
+  const handle2FASubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!twoFACode.trim()) return;
+    setIs2FASubmitting(true);
+    try {
+      const res = await fetch("/api/bot/2fa", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: twoFACode.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        toast({ title: "Xác minh thành công!", description: "Bot đang kết nối..." });
+        setTwoFACode("");
+      } else {
+        toast({ title: "Lỗi xác minh", description: data.error || "Mã không đúng. Vui lòng thử lại.", variant: "destructive" });
+      }
+      queryClient.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
+    } catch {
+      toast({ title: "Lỗi kết nối", description: "Không thể gửi mã xác minh.", variant: "destructive" });
+    } finally {
+      setIs2FASubmitting(false);
+    }
   };
 
   const handleStartAppState = (e: React.FormEvent) => {
@@ -180,6 +212,7 @@ export default function Dashboard() {
   const isConnecting = botStatus?.status === "connecting";
   const isStopped = botStatus?.status === "stopped";
   const hasError = botStatus?.status === "error";
+  const isWaiting2FA = botStatus?.status === "waiting_2fa";
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -195,6 +228,7 @@ export default function Dashboard() {
           {isConnecting && <Badge className="bg-amber-500/15 text-amber-500 hover:bg-amber-500/25 border-amber-500/20 animate-pulse">Connecting</Badge>}
           {isStopped && <Badge variant="secondary">Offline</Badge>}
           {hasError && <Badge variant="destructive">Error</Badge>}
+          {isWaiting2FA && <Badge className="bg-violet-500/15 text-violet-500 hover:bg-violet-500/25 border-violet-500/20 animate-pulse">Chờ 2FA</Badge>}
         </div>
       </div>
 
@@ -222,10 +256,63 @@ export default function Dashboard() {
                 <Lock className="w-5 h-5 text-primary" />
                 Kết nối Facebook
               </CardTitle>
-              <CardDescription>Chọn phương thức đăng nhập</CardDescription>
+              <CardDescription>
+                {isWaiting2FA ? "Xác minh 2 bước" : "Chọn phương thức đăng nhập"}
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              {isStopped || hasError ? (
+              {isWaiting2FA ? (
+                <form onSubmit={handle2FASubmit} className="space-y-4">
+                  <div className="flex items-start gap-3 p-3 rounded-lg bg-violet-500/10 border border-violet-500/20">
+                    <ShieldCheck className="w-5 h-5 text-violet-400 mt-0.5 flex-shrink-0" />
+                    <div className="text-sm">
+                      <p className="font-medium text-violet-300">Cần xác minh 2 bước</p>
+                      <p className="text-muted-foreground mt-0.5 text-xs">
+                        Facebook yêu cầu mã OTP. Mở ứng dụng xác thực (Authenticator) hoặc xem SMS để lấy mã 6 chữ số.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="twofa-code">Mã xác minh (OTP)</Label>
+                    <Input
+                      id="twofa-code"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      maxLength={8}
+                      placeholder="Ví dụ: 123456"
+                      value={twoFACode}
+                      onChange={(e) => setTwoFACode(e.target.value.replace(/\D/g, ""))}
+                      className="text-center text-lg tracking-widest font-mono"
+                      autoFocus
+                    />
+                  </div>
+                  <Button
+                    type="submit"
+                    className="w-full"
+                    disabled={!twoFACode.trim() || is2FASubmitting}
+                  >
+                    {is2FASubmitting ? (
+                      <RefreshCcw className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <ShieldCheck className="w-4 h-4 mr-2" />
+                    )}
+                    {is2FASubmitting ? "Đang xác minh..." : "Xác nhận mã OTP"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="w-full text-xs text-muted-foreground"
+                    onClick={() => {
+                      fetch("/api/bot/stop", { method: "POST" }).then(() => {
+                        queryClient.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
+                      });
+                    }}
+                  >
+                    Hủy và đăng nhập lại
+                  </Button>
+                </form>
+              ) : isStopped || hasError ? (
                 <div className="w-full">
                   {/* Custom tab buttons */}
                   <div className="flex rounded-lg bg-background/60 border border-border/40 p-1 mb-4 gap-1">

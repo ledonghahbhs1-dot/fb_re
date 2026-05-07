@@ -70,6 +70,14 @@ export type LoginCredentials =
   | { type: "credentials"; email: string; password: string }
   | { type: "appstate"; appState: any[] };
 
+// ── Special error thrown when Facebook requires 2FA ─────────────────────────
+export class TwoFactorRequired extends Error {
+  constructor() {
+    super("2FA_REQUIRED");
+    this.name = "TwoFactorRequired";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Session helpers — work on both facebook.com and messenger.com
 // ---------------------------------------------------------------------------
@@ -747,6 +755,106 @@ function startPollLoop() {
 // Public API
 // ---------------------------------------------------------------------------
 
+// ── Post-login setup: navigate to messages, extract UID/DTSG, start poll ────
+async function finishBotSetup(fallbackUID?: string): Promise<void> {
+  if (!bPage || !bContext) throw new Error("Browser not initialized");
+
+  blog("info", {}, "Navigating to facebook.com/messages/...");
+  await bPage.goto("https://www.facebook.com/messages/", {
+    waitUntil: "domcontentloaded",
+    timeout: 30000,
+  });
+
+  const fbUrl = bPage.url();
+  blog("info", { url: fbUrl }, "Navigation result");
+
+  if (fbUrl.includes("checkpoint")) {
+    throw new Error("Tài khoản đang bị Facebook checkpoint. Vui lòng xác minh trên điện thoại rồi thử lại.");
+  }
+  if (fbUrl.includes("/login")) {
+    try { fs.unlinkSync(BROWSER_STATE_PATH); } catch (_) {}
+    throw new Error("Đăng nhập thất bại hoặc cookie đã hết hạn. Vui lòng thử lại.");
+  }
+
+  await bPage.waitForTimeout(3000);
+
+  let uid = await extractUID(bPage);
+  if (!uid && fallbackUID) uid = fallbackUID;
+  sessionUID = uid;
+
+  const dtsg = await extractDtsg(bPage);
+  if (!dtsg) throw new Error("Không thể lấy token bảo mật (fb_dtsg). Vui lòng thử lại.");
+  sessionDtsg = dtsg;
+
+  await saveBrowserState(bContext);
+
+  blog("info", { uid, dtsgPrefix: sessionDtsg.substring(0, 10) + "..." }, "Session ready");
+
+  botState.status = "running";
+  botState.startedAt = new Date();
+  botState.error = null;
+
+  startPollLoop();
+}
+
+// ── Submit OTP code when Facebook requires 2-step verification ───────────────
+export async function submit2FACode(code: string): Promise<void> {
+  if (!bPage || botState.status !== "waiting_2fa") {
+    throw new Error("Không có phiên 2FA đang chờ. Vui lòng đăng nhập lại.");
+  }
+
+  blog("info", {}, "Submitting 2FA OTP code");
+
+  const codeInput = bPage.locator([
+    'input[name="approvals_code"]',
+    'input[name="otp"]',
+    'input[autocomplete="one-time-code"]',
+    'input[type="tel"]',
+    'input[inputmode="numeric"]',
+    'input[name="code"]',
+  ].join(", "));
+
+  await codeInput.waitFor({ timeout: 10000 });
+  await codeInput.fill(code.trim());
+
+  const submitDone = await bPage.evaluate(() => {
+    const selectors = [
+      "#checkpointSubmitButton",
+      'button[name="submit[Continue]"]',
+      'button[type="submit"]',
+      'input[type="submit"]',
+      "form button",
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel) as HTMLElement | null;
+      if (el) { el.click(); return sel; }
+    }
+    return null;
+  });
+  if (!submitDone) await codeInput.press("Enter");
+
+  await bPage.waitForURL(
+    (url) => !url.toString().includes("checkpoint") && !url.toString().includes("two_step"),
+    { timeout: 20000 }
+  ).catch(() => {});
+
+  await bPage.waitForTimeout(2000);
+
+  const postUrl = bPage.url();
+  if (
+    postUrl.includes("checkpoint") ||
+    postUrl.includes("two_step") ||
+    postUrl.includes("/login")
+  ) {
+    throw new Error("Mã xác minh không đúng hoặc đã hết hạn. Vui lòng thử lại.");
+  }
+
+  blog("info", { url: postUrl }, "2FA verified — continuing bot setup");
+  botState.error = null;
+
+  await finishBotSetup();
+}
+
 export async function startBot(credentials: LoginCredentials): Promise<void> {
   if (botState.status === "running" || botState.status === "connecting") {
     throw new Error("Bot đang chạy hoặc đang kết nối");
@@ -895,64 +1003,26 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
       loginUrl.includes("2fac") ||
       loginContent.includes("mã xác nhận") ||
       loginContent.includes("verification code") ||
-      loginContent.includes("two-factor")
+      loginContent.includes("two-factor") ||
+      loginContent.includes("approvals_code")
     ) {
-      throw new Error("Tài khoản bật xác minh 2 bước (2FA). Hãy tắt 2FA tạm thời hoặc dùng phương thức App State.");
+      blog("info", { url: loginUrl }, "2FA detected — waiting for user OTP");
+      botState.status = "waiting_2fa";
+      botState.error = "Tài khoản yêu cầu xác minh 2 bước. Vui lòng nhập mã OTP để tiếp tục đăng nhập.";
+      throw new TwoFactorRequired();
     }
 
-    if (loginUrl.includes("checkpoint")) {
-      throw new Error("Facebook phát hiện đăng nhập đáng ngờ và yêu cầu xác minh. Hãy mở Facebook trên điện thoại để xác nhận rồi thử lại với App State.");
-    }
-
-    blog("info", { url: loginUrl }, "Credentials login succeeded, navigating to messages");
+    blog("info", { url: loginUrl }, "Credentials login succeeded");
   }
 
-  // Navigate to facebook.com/messages/ to load the session
-  blog("info", {}, "Navigating to facebook.com/messages/...");
-  await bPage.goto("https://www.facebook.com/messages/", {
-    waitUntil: "domcontentloaded",
-    timeout: 30000,
-  });
-
-  const fbUrl = bPage.url();
-  blog("info", { url: fbUrl }, "Navigation result");
-
-  if (fbUrl.includes("checkpoint")) {
-    throw new Error("Tài khoản đang bị Facebook checkpoint. Vui lòng xác minh trên trình duyệt rồi thử lại với cookies mới.");
-  }
-  if (fbUrl.includes("/login")) {
-    // Delete stale saved state so next attempt uses fresh cookies
-    try { fs.unlinkSync(BROWSER_STATE_PATH); } catch (_) {}
-    if (credentials.type === "credentials") {
-      throw new Error("Đăng nhập thất bại. Facebook có thể đã chặn IP này. Hãy thử dùng App State (cookie) thay vì email/password.");
-    }
-    throw new Error("Cookie đã hết hạn hoặc không hợp lệ. Vui lòng lấy cookies mới từ trình duyệt.");
-  }
-
-  // Wait a bit for React + E2EE keys to initialize
-  await bPage.waitForTimeout(3000);
-
-  let uid = await extractUID(bPage);
-  if (!uid && credentials.type === "appstate") {
+  // ── Post-login: navigate to messages, extract session data, start poll ─────
+  let fallbackUID: string | undefined;
+  if (credentials.type === "appstate") {
     const cUser = credentials.appState.find((c: any) => c.key === "c_user");
-    if (cUser) uid = String(cUser.value);
+    if (cUser) fallbackUID = String(cUser.value);
   }
-  sessionUID = uid;
 
-  const dtsg = await extractDtsg(bPage);
-  if (!dtsg) throw new Error("Không thể lấy token bảo mật (fb_dtsg). Cookie có thể không đủ hoặc đã hết hạn.");
-  sessionDtsg = dtsg;
-
-  // Save browser state now (cookies + localStorage with E2EE keys)
-  await saveBrowserState(bContext);
-
-  blog("info", { uid, dtsgPrefix: sessionDtsg.substring(0, 10) + "...", url: fbUrl }, "Session ready");
-
-  botState.status = "running";
-  botState.startedAt = new Date();
-  botState.error = null;
-
-  startPollLoop();
+  await finishBotSetup(fallbackUID);
 }
 
 export function stopBot(): void {

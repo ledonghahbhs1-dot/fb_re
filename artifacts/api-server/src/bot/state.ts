@@ -1,4 +1,4 @@
-export type BotStatus = "stopped" | "connecting" | "running" | "error";
+export type BotStatus = "stopped" | "connecting" | "running" | "error" | "waiting_2fa";
 
 export interface BotState {
   status: BotStatus;
