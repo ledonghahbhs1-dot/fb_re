@@ -94,11 +94,15 @@ router.get("/bot/status", (_req, res) => {
 });
 
 router.post("/bot/start", async (req, res) => {
-  const { email, password, appState } = req.body as {
+  const body = req.body as {
     email?: string;
+    identifier?: string;
     password?: string;
     appState?: string;
   };
+  // Support both "email" (legacy) and "identifier" (email / phone / FB ID)
+  const identifier = body.identifier ?? body.email;
+  const { password, appState } = body;
 
   try {
     if (appState) {
@@ -127,10 +131,10 @@ router.post("/bot/start", async (req, res) => {
       }
 
       await startBot({ type: "appstate", appState: parsed });
-    } else if (email && password) {
-      await startBot({ type: "credentials", email, password });
+    } else if (identifier && password) {
+      await startBot({ type: "credentials", email: identifier.trim(), password });
     } else {
-      res.status(400).json({ error: "Vui lòng cung cấp email/password hoặc appState" });
+      res.status(400).json({ error: "Vui lòng cung cấp email/SĐT/Facebook ID + password hoặc appState" });
       return;
     }
 
