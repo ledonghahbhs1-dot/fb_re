@@ -53,3 +53,7 @@ API server nhận cookie Facebook + prompt, gọi AI và trả về reply. Có t
 - Cần ít nhất 1 AI key trong env, server sẽ warn nếu thiếu nhưng vẫn khởi động
 - Cookie phải có `xs` và `c_user` để bot Facebook hoạt động (chat API không bắt buộc)
 - Trên Railway: thêm env vars qua Railway dashboard, không hardcode
+
+## User Preferences
+
+- Sau mỗi thay đổi code, **tự động push lên GitHub** (`ledonghahbhs1-dot/fb_re`) bằng GITHUB_TOKEN mà không cần nhắc nhở.
