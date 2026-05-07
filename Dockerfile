@@ -1,7 +1,7 @@
 FROM mcr.microsoft.com/playwright:v1.59.1-noble
 
-# Install pnpm
-RUN npm install -g pnpm@9
+# Install pnpm (match version used in lockfile)
+RUN npm install -g pnpm@10
 
 WORKDIR /app
 

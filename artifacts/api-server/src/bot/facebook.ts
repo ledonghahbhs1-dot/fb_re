@@ -803,25 +803,59 @@ function startPollLoop() {
         msg.includes("page.goto: Page crashed") ||
         msg.includes("crashed");
 
-      if (isFatal) {
-        botState.status = "error";
-        botState.error = "Browser bị đóng đột ngột. Vui lòng dừng và khởi động lại bot.";
-        return;
-      }
-
-      if (isCrash && bContext) {
-        blog("warn", {}, "Page crashed — recreating page and retrying in 10s");
+      if (isFatal || isCrash) {
+        blog("warn", { isFatal, isCrash }, "Browser closed/crashed — attempting full browser restart");
         try {
-          if (bPage) { await bPage.close().catch(() => {}); }
+          // Tear down old browser completely
+          try { browser?.close(); } catch {}
+          browser = null; bContext = null; bPage = null;
+
+          await new Promise((r) => setTimeout(r, 3000));
+          if (stopSignal) return;
+
+          // Relaunch browser with same flags
+          browser = await chromium.launch({
+            ...(CHROMIUM_PATH ? { executablePath: CHROMIUM_PATH } : {}),
+            headless: true,
+            args: [
+              "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
+              "--disable-blink-features=AutomationControlled",
+              "--disable-gpu", "--disable-gpu-sandbox",
+              "--disable-features=VizDisplayCompositor,TranslateUI,BlinkGenPropertyTrees",
+              "--disable-accelerated-2d-canvas", "--disable-webgl",
+              "--disable-software-rasterizer", "--disable-background-networking",
+              "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows",
+              "--disable-renderer-backgrounding", "--disable-ipc-flooding-protection",
+              "--disable-hang-monitor", "--no-zygote", "--single-process",
+              "--no-first-run", "--no-default-browser-check", "--ignore-certificate-errors",
+              "--mute-audio", "--hide-scrollbars", "--memory-pressure-off",
+              "--js-flags=--max-old-space-size=256",
+            ],
+          });
+
+          const savedState = loadBrowserState();
+          bContext = await browser.newContext({
+            userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            locale: "vi-VN",
+            viewport: { width: 1280, height: 800 },
+            extraHTTPHeaders: { "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7" },
+            ...(savedState ? { storageState: savedState as any } : {}),
+          });
+          await bContext.addInitScript(() => {
+            Object.defineProperty(navigator, "webdriver", { get: () => false });
+            // @ts-ignore
+            if (!window.chrome) window.chrome = { runtime: {} };
+          });
+
           bPage = await bContext.newPage();
           await setupInterceptor(bPage);
-        } catch (recreateErr: any) {
-          blog("error", { err: recreateErr?.message }, "Failed to recreate page after crash");
+          blog("info", {}, "Browser restarted successfully — resuming poll");
+          if (!stopSignal) pollTimer = setTimeout(doPoll, 5000);
+        } catch (restartErr: any) {
+          blog("error", { err: restartErr?.message }, "Browser restart failed — stopping bot");
           botState.status = "error";
-          botState.error = "Không thể khôi phục sau crash. Vui lòng khởi động lại bot.";
-          return;
+          botState.error = "Không thể khởi động lại browser. Vui lòng dừng và khởi động lại bot.";
         }
-        if (!stopSignal) pollTimer = setTimeout(doPoll, 10000);
         return;
       }
     }
@@ -989,13 +1023,14 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
       "--disable-webgl",
       "--disable-software-rasterizer",
       "--no-zygote",
+      "--single-process",
       "--no-first-run",
       "--no-default-browser-check",
       "--ignore-certificate-errors",
       "--mute-audio",
       "--hide-scrollbars",
       "--memory-pressure-off",
-      "--js-flags=--max-old-space-size=512",
+      "--js-flags=--max-old-space-size=256",
     ],
   });
 
