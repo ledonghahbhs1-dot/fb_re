@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Trash2, Cookie, MessageSquare, Copy, Check, ChevronDown, ChevronUp, Settings, X, Zap, Eye, EyeOff, Loader2 } from "lucide-react";
+import { Send, Trash2, Cookie, MessageSquare, Copy, Check, ChevronDown, ChevronUp, Settings, X, Zap, Eye, EyeOff, Loader2, ExternalLink } from "lucide-react";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const API_BASE = BASE ? `${BASE}/api` : "/api";
@@ -133,7 +133,7 @@ export default function ChatPage() {
       const res = await fetch(`${API_BASE}/auth/fb-cookies`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: autoEmail, password: autoPass }),
+        body: JSON.stringify({ identifier: autoEmail.trim(), password: autoPass }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -499,8 +499,30 @@ print("Session đã được xóa.")
               </button>
             </div>
 
+            {/* Direct connect button */}
+            <div className="mx-5 mt-4">
+              <a
+                href="https://m.facebook.com/login"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full flex items-center justify-center gap-2 bg-[#1877F2]/20 hover:bg-[#1877F2]/30 border border-[#1877F2]/40 text-[#74a7f7] text-sm font-medium py-2.5 rounded-xl transition-all hover:scale-[1.01] active:scale-100"
+              >
+                <svg className="w-4 h-4 fill-current flex-shrink-0" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+                Kết nối trực tiếp qua Facebook
+                <ExternalLink className="w-3.5 h-3.5 opacity-70" />
+              </a>
+              <p className="text-[10px] text-gray-600 text-center mt-1.5">Mở Facebook → đăng nhập → lấy cookie từ trình duyệt</p>
+            </div>
+
+            {/* Divider */}
+            <div className="mx-5 mt-3 flex items-center gap-2">
+              <div className="flex-1 border-t border-gray-800" />
+              <span className="text-[10px] text-gray-600 font-medium px-1">hoặc nhập thủ công</span>
+              <div className="flex-1 border-t border-gray-800" />
+            </div>
+
             {/* Warning */}
-            <div className="mx-5 mt-4 bg-amber-900/20 border border-amber-700/40 rounded-lg px-3 py-2.5">
+            <div className="mx-5 mt-3 bg-amber-900/20 border border-amber-700/40 rounded-lg px-3 py-2.5">
               <p className="text-xs text-amber-400 leading-relaxed">
                 <strong>Lưu ý:</strong> Mật khẩu chỉ dùng để đăng nhập tạm thời, không lưu lại.
                 Nếu tài khoản bật <strong>2FA</strong>, hãy tắt tạm thời trước khi dùng tính năng này.
@@ -510,15 +532,16 @@ print("Session đã được xóa.")
             {/* Form */}
             <div className="px-5 py-4 space-y-3">
               <div>
-                <label className="text-xs text-gray-400 mb-1.5 block">Email / Số điện thoại Facebook</label>
+                <label className="text-xs text-gray-400 mb-1.5 block">Email / Số điện thoại / Facebook ID</label>
                 <input
-                  type="email"
+                  type="text"
                   value={autoEmail}
                   onChange={(e) => setAutoEmail(e.target.value)}
-                  placeholder="account@example.com"
+                  placeholder="account@example.com hoặc 0912345678 hoặc 100012345678"
                   disabled={autoLoading}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50"
                 />
+                <p className="text-[10px] text-gray-600 mt-1">Hỗ trợ: email, số điện thoại, hoặc Facebook ID (số)</p>
               </div>
               <div>
                 <label className="text-xs text-gray-400 mb-1.5 block">Mật khẩu</label>
