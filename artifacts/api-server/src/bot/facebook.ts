@@ -809,14 +809,14 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
     // Always inject the user's fresh cookies on top of any saved state.
     // This ensures the latest tokens are used even if saved state has older cookies.
     const cookiesBases = credentials.appState.map((c: any) => ({
-      name: c.key,
+      name: c.key ?? c.name,
       value: c.value,
       path: c.path ?? "/",
       expires: typeof c.expires === "number" && c.expires > 0 ? c.expires : -1,
       httpOnly: c.httpOnly ?? true,
       secure: c.secure ?? true,
       sameSite: "None" as const,
-    }));
+    })).filter((c) => c.name && c.value);
     const fbCookies = cookiesBases.map((c) => ({ ...c, domain: ".facebook.com" }));
     const msgrCookies = cookiesBases.map((c) => ({ ...c, domain: ".messenger.com" }));
     await bContext.addCookies([...fbCookies, ...msgrCookies]);
@@ -827,6 +827,61 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
 
   // Set up interceptors BEFORE any navigation
   await setupInterceptor(bPage);
+
+  if (credentials.type === "credentials") {
+    // ── Credentials login: automate Playwright browser login ──
+    blog("info", { identifier: credentials.email }, "Performing credentials login via Playwright");
+
+    await bPage.goto("https://m.facebook.com/login", {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+
+    const emailInput = bPage.locator('input[name="email"], input[type="email"], #m_login_email');
+    await emailInput.waitFor({ timeout: 15000 });
+    await emailInput.fill(credentials.email);
+
+    const passInput = bPage.locator('input[name="pass"], input[type="password"]');
+    await passInput.fill(credentials.password);
+
+    const loginBtn = bPage.locator('button[name="login"], input[name="login"], [data-sigil="m_login_button"]').first();
+    await loginBtn.click();
+
+    await bPage.waitForURL((url) => !url.toString().includes("/login"), { timeout: 25000 }).catch(() => {});
+    await bPage.waitForTimeout(2500);
+
+    const loginUrl = bPage.url();
+    const loginContent = await bPage.content();
+
+    if (loginUrl.includes("/login") || loginUrl.includes("login.php")) {
+      const hasError =
+        loginContent.includes("Mật khẩu") ||
+        loginContent.includes("password") ||
+        loginContent.includes("incorrect") ||
+        loginContent.includes("không đúng") ||
+        loginContent.includes("error");
+      if (hasError) {
+        throw new Error("Email/SĐT/Facebook ID hoặc mật khẩu không đúng. Vui lòng kiểm tra lại.");
+      }
+    }
+
+    if (
+      loginUrl.includes("checkpoint") ||
+      loginUrl.includes("two_step") ||
+      loginUrl.includes("2fac") ||
+      loginContent.includes("mã xác nhận") ||
+      loginContent.includes("verification code") ||
+      loginContent.includes("two-factor")
+    ) {
+      throw new Error("Tài khoản bật xác minh 2 bước (2FA). Hãy tắt 2FA tạm thời hoặc dùng phương thức App State.");
+    }
+
+    if (loginUrl.includes("checkpoint")) {
+      throw new Error("Facebook phát hiện đăng nhập đáng ngờ và yêu cầu xác minh. Hãy mở Facebook trên điện thoại để xác nhận rồi thử lại với App State.");
+    }
+
+    blog("info", { url: loginUrl }, "Credentials login succeeded, navigating to messages");
+  }
 
   // Navigate to facebook.com/messages/ to load the session
   blog("info", {}, "Navigating to facebook.com/messages/...");
@@ -844,6 +899,9 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
   if (fbUrl.includes("/login")) {
     // Delete stale saved state so next attempt uses fresh cookies
     try { fs.unlinkSync(BROWSER_STATE_PATH); } catch (_) {}
+    if (credentials.type === "credentials") {
+      throw new Error("Đăng nhập thất bại. Facebook có thể đã chặn IP này. Hãy thử dùng App State (cookie) thay vì email/password.");
+    }
     throw new Error("Cookie đã hết hạn hoặc không hợp lệ. Vui lòng lấy cookies mới từ trình duyệt.");
   }
 

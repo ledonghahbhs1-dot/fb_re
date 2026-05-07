@@ -225,7 +225,7 @@ router.post("/chat/reset", (req: Request, res: Response) => {
 
 // ── GET /api/chat/session/:id ─────────────────────────────────────────────
 router.get("/chat/session/:id", (req: Request, res: Response) => {
-  const session = sessions.get(req.params.id);
+  const session = sessions.get(String(req.params.id));
   if (!session) {
     res.status(404).json({ error: "Session không tồn tại" });
     return;
