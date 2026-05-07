@@ -332,17 +332,28 @@ export default function Dashboard() {
                   {/* CREDENTIALS PANEL */}
                   {loginTab === "credentials" && (
                     <form onSubmit={handleStartCredentials} className="space-y-3">
-                      {/* Direct connect button */}
-                      <a
-                        href="https://m.facebook.com/login"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="w-full flex items-center justify-center gap-2 bg-[#1877F2]/15 hover:bg-[#1877F2]/25 border border-[#1877F2]/30 text-blue-400 text-xs font-medium py-2.5 rounded-lg transition-all hover:scale-[1.01]"
+                      {/* Direct connect button — opens Facebook login popup */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const w = 600, h = 700;
+                          const left = Math.max(0, (window.screen.width - w) / 2);
+                          const top = Math.max(0, (window.screen.height - h) / 2);
+                          window.open(
+                            "https://www.facebook.com/login",
+                            "fb_login",
+                            `width=${w},height=${h},top=${top},left=${left},toolbar=no,menubar=no,scrollbars=yes,resizable=yes`
+                          );
+                        }}
+                        className="w-full flex items-center justify-center gap-2 bg-[#1877F2]/15 hover:bg-[#1877F2]/25 border border-[#1877F2]/30 text-blue-400 text-xs font-medium py-2.5 rounded-lg transition-all hover:scale-[1.01] cursor-pointer"
                       >
                         <svg className="w-3.5 h-3.5 fill-current flex-shrink-0" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
-                        Kết nối trực tiếp qua Facebook
+                        Mở cửa sổ đăng nhập Facebook
                         <ExternalLink className="w-3 h-3 opacity-60" />
-                      </a>
+                      </button>
+                      <p className="text-[10px] text-muted-foreground/50 text-center -mt-1">
+                        Đăng nhập Facebook trong cửa sổ popup → sau đó dùng App State để lấy cookie
+                      </p>
 
                       <div className="flex items-center gap-2">
                         <div className="flex-1 border-t border-border/40" />
