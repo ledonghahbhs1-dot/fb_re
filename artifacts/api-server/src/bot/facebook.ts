@@ -809,14 +809,14 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
     // Always inject the user's fresh cookies on top of any saved state.
     // This ensures the latest tokens are used even if saved state has older cookies.
     const cookiesBases = credentials.appState.map((c: any) => ({
-      name: c.key ?? c.name,
+      name: c.key,
       value: c.value,
       path: c.path ?? "/",
       expires: typeof c.expires === "number" && c.expires > 0 ? c.expires : -1,
       httpOnly: c.httpOnly ?? true,
       secure: c.secure ?? true,
       sameSite: "None" as const,
-    })).filter((c) => c.name && c.value);
+    }));
     const fbCookies = cookiesBases.map((c) => ({ ...c, domain: ".facebook.com" }));
     const msgrCookies = cookiesBases.map((c) => ({ ...c, domain: ".messenger.com" }));
     await bContext.addCookies([...fbCookies, ...msgrCookies]);
