@@ -748,9 +748,8 @@ function startPollLoop() {
           await scrapeConversationDOM(bPage, true);
         }
       } else {
-        // Subsequent polls: scrape DOM of current inbox page only.
-        // The response interceptor already fires in real-time on network events,
-        // so full per-thread navigation is only needed for threads with new activity.
+        // Subsequent polls: visit threads with unread badges PLUS always
+        // check the top 3 sidebar threads as fallback (in case badge detection misses).
         const threadIDsWithNew = await bPage.evaluate(() => {
           // Facebook marks unread threads with a blue dot or bold text
           const unread: string[] = [];
@@ -767,8 +766,11 @@ function startPollLoop() {
           return unread;
         });
 
-        // Always check threads that the interceptor flagged, plus unread ones
-        const toVisit = [...new Set([...threadIDsWithNew])].slice(0, 5);
+        // Always visit top 3 sidebar threads regardless of badge detection.
+        // Badge heuristic often fails when Facebook changes DOM → toVisit was empty.
+        const topThreads = threadIDs.slice(0, 3);
+        const toVisit = [...new Set([...threadIDsWithNew, ...topThreads])].slice(0, 5);
+        blog("info", { badgeThreads: threadIDsWithNew, topThreads, toVisit }, "Poll: threads to visit");
 
         for (const tid of toVisit) {
           if (stopSignal) break;
