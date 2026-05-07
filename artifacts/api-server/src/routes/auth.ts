@@ -62,11 +62,28 @@ router.post("/auth/fb-cookies", async (req, res) => {
 
     // Fill password
     const passInput = page.locator('input[name="pass"], input[type="password"]');
+    await passInput.waitFor({ timeout: 10000 });
     await passInput.fill(password);
 
-    // Submit
-    const loginBtn = page.locator('button[name="login"], input[name="login"], [data-sigil="m_login_button"]').first();
-    await loginBtn.click();
+    // Submit — try multiple selectors, fallback to pressing Enter
+    const submitted = await page.evaluate(() => {
+      const selectors = [
+        'button[name="login"]',
+        'input[name="login"]',
+        '[data-sigil="m_login_button"]',
+        'button[type="submit"]',
+        'input[type="submit"]',
+        'form button',
+      ];
+      for (const sel of selectors) {
+        const el = document.querySelector(sel) as HTMLElement | null;
+        if (el) { el.click(); return sel; }
+      }
+      return null;
+    });
+    if (!submitted) {
+      await passInput.press("Enter");
+    }
 
     // Wait for redirect away from login page
     await page.waitForURL((url) => !url.toString().includes("/login"), { timeout: 20000 }).catch(() => {});
