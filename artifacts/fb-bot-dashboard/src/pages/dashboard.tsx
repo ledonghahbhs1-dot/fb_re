@@ -25,6 +25,7 @@ import {
   ChevronUp,
   Terminal,
   Trash2,
+  ExternalLink,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -54,7 +55,7 @@ export default function Dashboard() {
   const updateSettings = useUpdateBotSettings();
 
   const [loginTab, setLoginTab] = useState<LoginTab>("appstate");
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [appState, setAppState] = useState("");
   const [showGuide, setShowGuide] = useState(false);
@@ -106,8 +107,8 @@ export default function Dashboard() {
 
   const handleStartCredentials = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password) return;
-    startBot.mutate({ data: { email, password } }, {
+    if (!identifier || !password) return;
+    startBot.mutate({ data: { identifier, password } as any }, {
       onSuccess: () => {
         toast({ title: "Đang kết nối Facebook..." });
         queryClient.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
@@ -330,7 +331,25 @@ export default function Dashboard() {
 
                   {/* CREDENTIALS PANEL */}
                   {loginTab === "credentials" && (
-                    <form onSubmit={handleStartCredentials} className="space-y-4">
+                    <form onSubmit={handleStartCredentials} className="space-y-3">
+                      {/* Direct connect button */}
+                      <a
+                        href="https://m.facebook.com/login"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full flex items-center justify-center gap-2 bg-[#1877F2]/15 hover:bg-[#1877F2]/25 border border-[#1877F2]/30 text-blue-400 text-xs font-medium py-2.5 rounded-lg transition-all hover:scale-[1.01]"
+                      >
+                        <svg className="w-3.5 h-3.5 fill-current flex-shrink-0" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+                        Kết nối trực tiếp qua Facebook
+                        <ExternalLink className="w-3 h-3 opacity-60" />
+                      </a>
+
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 border-t border-border/40" />
+                        <span className="text-[10px] text-muted-foreground/50 font-medium">hoặc nhập thủ công</span>
+                        <div className="flex-1 border-t border-border/40" />
+                      </div>
+
                       <Alert className="bg-amber-500/10 border-amber-500/30 text-amber-400 py-2 px-3">
                         <AlertCircle className="h-3.5 w-3.5" />
                         <AlertDescription className="text-xs ml-1">
@@ -338,17 +357,18 @@ export default function Dashboard() {
                         </AlertDescription>
                       </Alert>
                       <div className="space-y-2">
-                        <Label htmlFor="email">Email Facebook</Label>
+                        <Label htmlFor="identifier">Email / ID / SĐT</Label>
                         <Input
-                          id="email"
-                          type="email"
-                          placeholder="account@example.com"
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
+                          id="identifier"
+                          type="text"
+                          placeholder="email, số điện thoại hoặc Facebook ID"
+                          value={identifier}
+                          onChange={(e) => setIdentifier(e.target.value)}
                           required
                           className="bg-background/50"
                           data-testid="input-email"
                         />
+                        <p className="text-[10px] text-muted-foreground/60">Hỗ trợ: email, SĐT, hoặc Facebook ID (dạng số)</p>
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="password">Mật khẩu</Label>
