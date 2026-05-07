@@ -353,6 +353,17 @@ print("Session đã được xóa.")
         {mobileDrawerOpen && (
           <div className="md:hidden fixed inset-0 z-40 flex flex-col" style={{ top: 53 }}>
             <div className="bg-gray-950 border-b border-gray-800 overflow-y-auto max-h-[75vh] shadow-2xl">
+              {/* Mobile drawer header with close button */}
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-800/60 bg-gray-900/50">
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Cấu hình</span>
+                <button
+                  onClick={() => setMobileDrawerOpen(false)}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-gray-200 transition-colors"
+                  aria-label="Đóng"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
               <ConfigPanel />
             </div>
             <div
@@ -532,16 +543,16 @@ print("Session đã được xóa.")
             {/* Form */}
             <div className="px-5 py-4 space-y-3">
               <div>
-                <label className="text-xs text-gray-400 mb-1.5 block">Email / Số điện thoại / Facebook ID</label>
+                <label className="text-xs text-gray-400 mb-1.5 block">Email / ID / SĐT</label>
                 <input
                   type="text"
                   value={autoEmail}
                   onChange={(e) => setAutoEmail(e.target.value)}
-                  placeholder="account@example.com hoặc 0912345678 hoặc 100012345678"
+                  placeholder="email, số điện thoại hoặc Facebook ID"
                   disabled={autoLoading}
                   className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-600 transition-colors disabled:opacity-50"
                 />
-                <p className="text-[10px] text-gray-600 mt-1">Hỗ trợ: email, số điện thoại, hoặc Facebook ID (số)</p>
+                <p className="text-[10px] text-gray-600 mt-1">Hỗ trợ: email, SĐT, hoặc Facebook ID (dạng số)</p>
               </div>
               <div>
                 <label className="text-xs text-gray-400 mb-1.5 block">Mật khẩu</label>
