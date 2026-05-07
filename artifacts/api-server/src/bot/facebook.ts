@@ -699,37 +699,90 @@ async function getSidebarThreadIDs(page: Page): Promise<string[]> {
 // ---------------------------------------------------------------------------
 function startPollLoop() {
   let firstPoll = true;
+  // How often to do a full reload of the inbox (every N fast polls)
+  const FULL_RELOAD_EVERY = 6;
+  let fastPollCount = 0;
 
   async function doPoll() {
     if (stopSignal || !bPage) return;
 
     try {
-      // Always start from the inbox to get an updated sidebar
-      await bPage.goto("https://www.facebook.com/messages/", {
-        waitUntil: "domcontentloaded",
-        timeout: 25000,
-      });
-      // Let the sidebar load
-      await bPage.waitForTimeout(2500);
+      const currentUrl = bPage.url();
+      const alreadyOnMessages =
+        currentUrl.includes("facebook.com/messages") ||
+        currentUrl.includes("messenger.com");
+
+      if (firstPoll || !alreadyOnMessages || fastPollCount % FULL_RELOAD_EVERY === 0) {
+        // Full navigation — needed on first poll or when page drifted
+        await bPage.goto("https://www.facebook.com/messages/", {
+          waitUntil: "domcontentloaded",
+          timeout: 25000,
+        });
+        await bPage.waitForTimeout(1200);
+      } else {
+        // Fast reload — stays on same URL, triggers GraphQL interceptors
+        await bPage.reload({ waitUntil: "domcontentloaded", timeout: 15000 });
+        await bPage.waitForTimeout(800);
+      }
+
+      fastPollCount++;
 
       const dtsg = await extractDtsg(bPage);
       if (dtsg) sessionDtsg = dtsg;
 
       // Discover conversations from the sidebar
       const threadIDs = await getSidebarThreadIDs(bPage);
-      blog("info", { threadIDs, initOnly: firstPoll }, "Poll: discovered conversations");
+      blog("info", { threadIDs, initOnly: firstPoll, fastPollCount }, "Poll: discovered conversations");
 
-      // Visit each conversation and scrape it
-      for (const tid of threadIDs) {
-        if (stopSignal) break;
-
-        await bPage.goto(`https://www.facebook.com/messages/t/${tid}/`, {
-          waitUntil: "domcontentloaded",
-          timeout: 20000,
+      if (firstPoll) {
+        // On first poll: visit every thread to seed lastSeenTimestamp (no reply)
+        for (const tid of threadIDs) {
+          if (stopSignal) break;
+          await bPage.goto(`https://www.facebook.com/messages/t/${tid}/`, {
+            waitUntil: "domcontentloaded",
+            timeout: 20000,
+          });
+          await bPage.waitForTimeout(900);
+          await scrapeConversationDOM(bPage, true);
+        }
+      } else {
+        // Subsequent polls: scrape DOM of current inbox page only.
+        // The response interceptor already fires in real-time on network events,
+        // so full per-thread navigation is only needed for threads with new activity.
+        const threadIDsWithNew = await bPage.evaluate(() => {
+          // Facebook marks unread threads with a blue dot or bold text
+          const unread: string[] = [];
+          document.querySelectorAll('a[href*="/messages/t/"], a[href*="/messages/e2ee/t/"]').forEach((a) => {
+            const href = a.getAttribute("href") ?? "";
+            const m = href.match(/\/messages\/(?:e2ee\/)?t\/(\d+)/);
+            if (!m?.[1]) return;
+            // Heuristic: unread = has a visible badge/dot element inside
+            const hasBadge =
+              a.querySelector('[aria-label*="chưa đọc"], [aria-label*="unread"], [data-visualcompletion="ignore"]') !== null ||
+              (a as HTMLElement).closest('[aria-label*="chưa đọc"]') !== null;
+            if (hasBadge) unread.push(m[1]);
+          });
+          return unread;
         });
-        await bPage.waitForTimeout(1800);
 
-        await scrapeConversationDOM(bPage, firstPoll);
+        // Always check threads that the interceptor flagged, plus unread ones
+        const toVisit = [...new Set([...threadIDsWithNew])].slice(0, 5);
+
+        for (const tid of toVisit) {
+          if (stopSignal) break;
+          await bPage.goto(`https://www.facebook.com/messages/t/${tid}/`, {
+            waitUntil: "domcontentloaded",
+            timeout: 15000,
+          });
+          await bPage.waitForTimeout(700);
+          await scrapeConversationDOM(bPage, false);
+          // Return to inbox after each thread
+          await bPage.goto("https://www.facebook.com/messages/", {
+            waitUntil: "domcontentloaded",
+            timeout: 15000,
+          });
+          await bPage.waitForTimeout(600);
+        }
       }
 
       firstPoll = false;
@@ -771,11 +824,12 @@ function startPollLoop() {
       }
     }
 
-    if (!stopSignal) pollTimer = setTimeout(doPoll, 15000);
+    // Fast poll: 5s normally, slower after a full reload to let page settle
+    if (!stopSignal) pollTimer = setTimeout(doPoll, 5000);
   }
 
   // First poll after a short delay to let the page fully settle
-  pollTimer = setTimeout(doPoll, 5000);
+  pollTimer = setTimeout(doPoll, 4000);
 }
 
 // ---------------------------------------------------------------------------
