@@ -842,10 +842,34 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
     await emailInput.fill(credentials.email);
 
     const passInput = bPage.locator('input[name="pass"], input[type="password"]');
+    await passInput.waitFor({ timeout: 10000 });
     await passInput.fill(credentials.password);
 
-    const loginBtn = bPage.locator('button[name="login"], input[name="login"], [data-sigil="m_login_button"]').first();
-    await loginBtn.click();
+    // Try multiple strategies to submit the login form:
+    // 1. Click any visible submit button inside the form
+    // 2. Fallback: press Enter on the password field
+    const submitted = await bPage.evaluate(() => {
+      const selectors = [
+        'button[name="login"]',
+        'input[name="login"]',
+        '[data-sigil="m_login_button"]',
+        'button[type="submit"]',
+        'input[type="submit"]',
+        'form button',
+      ];
+      for (const sel of selectors) {
+        const el = document.querySelector(sel) as HTMLElement | null;
+        if (el) { el.click(); return sel; }
+      }
+      return null;
+    });
+
+    if (!submitted) {
+      blog("info", {}, "No submit button found — pressing Enter on password field");
+      await passInput.press("Enter");
+    } else {
+      blog("info", { submitted }, "Login button clicked");
+    }
 
     await bPage.waitForURL((url) => !url.toString().includes("/login"), { timeout: 25000 }).catch(() => {});
     await bPage.waitForTimeout(2500);
