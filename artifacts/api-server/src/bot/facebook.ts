@@ -737,9 +737,36 @@ function startPollLoop() {
     } catch (err: any) {
       const msg = err?.message ?? String(err);
       blog("error", { err: msg }, "Poll error");
-      if (msg.includes("Target closed") || msg.includes("browser has been closed")) {
+
+      const isFatal =
+        msg.includes("browser has been closed") ||
+        msg.includes("Browser closed") ||
+        msg.includes("Target closed");
+
+      const isCrash =
+        msg.includes("Page crashed") ||
+        msg.includes("page.goto: Page crashed") ||
+        msg.includes("crashed");
+
+      if (isFatal) {
         botState.status = "error";
-        botState.error = "Browser gặp lỗi. Vui lòng dừng và khởi động lại bot.";
+        botState.error = "Browser bị đóng đột ngột. Vui lòng dừng và khởi động lại bot.";
+        return;
+      }
+
+      if (isCrash && bContext) {
+        blog("warn", {}, "Page crashed — recreating page and retrying in 10s");
+        try {
+          if (bPage) { await bPage.close().catch(() => {}); }
+          bPage = await bContext.newPage();
+          await setupInterceptor(bPage);
+        } catch (recreateErr: any) {
+          blog("error", { err: recreateErr?.message }, "Failed to recreate page after crash");
+          botState.status = "error";
+          botState.error = "Không thể khôi phục sau crash. Vui lòng khởi động lại bot.";
+          return;
+        }
+        if (!stopSignal) pollTimer = setTimeout(doPoll, 10000);
         return;
       }
     }
@@ -880,10 +907,28 @@ export async function startBot(credentials: LoginCredentials): Promise<void> {
       "--disable-dev-shm-usage",
       "--disable-blink-features=AutomationControlled",
       "--disable-gpu",
+      "--disable-gpu-sandbox",
       "--disable-infobars",
       "--disable-extensions",
+      "--disable-default-apps",
+      "--disable-background-networking",
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
+      "--disable-features=VizDisplayCompositor,TranslateUI,BlinkGenPropertyTrees",
+      "--disable-ipc-flooding-protection",
+      "--disable-hang-monitor",
+      "--disable-accelerated-2d-canvas",
+      "--disable-webgl",
+      "--disable-software-rasterizer",
+      "--no-zygote",
       "--no-first-run",
+      "--no-default-browser-check",
       "--ignore-certificate-errors",
+      "--mute-audio",
+      "--hide-scrollbars",
+      "--memory-pressure-off",
+      "--js-flags=--max-old-space-size=512",
     ],
   });
 
