@@ -1,6 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { startBot } from "./bot/facebook";
+import { startBot, canAutoRestart } from "./bot/facebook";
 
 const rawPort = process.env["PORT"];
 
@@ -60,9 +60,7 @@ app.listen(port, async (err) => {
 
   logger.info({ port }, "Server listening");
 
-  // Auto-start bot when FB_COOKIES env var is set.
-  // On Railway: add FB_COOKIES variable (raw cookie string or JSON appstate array).
-  // The bot starts automatically on deploy — no dashboard interaction needed.
+  // ── Priority 1: FB_COOKIES env var (Railway / explicit config) ──────────────
   const fbCookiesRaw = process.env["FB_COOKIES"];
   if (fbCookiesRaw) {
     logger.info("FB_COOKIES env var detected — auto-starting bot");
@@ -74,8 +72,22 @@ app.listen(port, async (err) => {
         await startBot({ type: "appstate", appState });
         logger.info("Bot auto-started from FB_COOKIES ✓");
       } catch (startErr: any) {
-        logger.error({ err: startErr?.message }, "Auto-start failed — check FB_COOKIES validity");
+        logger.error({ err: startErr?.message }, "Auto-start from FB_COOKIES failed");
       }
+    }
+    return;
+  }
+
+  // ── Priority 2: Saved browser state from previous session ────────────────
+  // If user started the bot before and didn't manually stop it, auto-restart.
+  if (canAutoRestart()) {
+    logger.info("Saved session detected — auto-restarting bot from previous session");
+    try {
+      // Pass empty appState — startBot will use saved browser-state.json cookies
+      await startBot({ type: "appstate", appState: [] });
+      logger.info("Bot auto-restarted from saved session ✓");
+    } catch (startErr: any) {
+      logger.warn({ err: startErr?.message }, "Auto-restart from saved session failed — manual login needed");
     }
   }
 });

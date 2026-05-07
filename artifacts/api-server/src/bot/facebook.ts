@@ -24,9 +24,11 @@ const CHROMIUM_PATH: string | undefined =
 // Persisted browser state (cookies + localStorage incl. E2EE keys).
 // On Railway: mount a volume at /data and set STATE_DIR=/data for persistence
 // across restarts. Without a volume, state resets on each deploy.
-const BROWSER_STATE_PATH = process.env.STATE_DIR
-  ? path.join(process.env.STATE_DIR, "browser-state.json")
-  : path.join(process.cwd(), "dist", "browser-state.json");
+const STATE_BASE = process.env.STATE_DIR ?? path.join(process.cwd(), "dist");
+const BROWSER_STATE_PATH = path.join(STATE_BASE, "browser-state.json");
+// Flag written when bot starts successfully; deleted when manually stopped.
+// Presence = user wants bot to auto-restart on server reboot.
+const AUTOSTART_FLAG_PATH = path.join(STATE_BASE, "autostart.flag");
 
 function loadBrowserState(): object | null {
   try {
@@ -869,6 +871,12 @@ async function finishBotSetup(fallbackUID?: string): Promise<void> {
 
   await saveBrowserState(bContext);
 
+  // Write autostart flag so server knows to restart bot after reboot
+  try {
+    fs.mkdirSync(STATE_BASE, { recursive: true });
+    fs.writeFileSync(AUTOSTART_FLAG_PATH, new Date().toISOString());
+  } catch {}
+
   blog("info", { uid, dtsgPrefix: sessionDtsg.substring(0, 10) + "..." }, "Session ready");
 
   botState.status = "running";
@@ -876,6 +884,11 @@ async function finishBotSetup(fallbackUID?: string): Promise<void> {
   botState.error = null;
 
   startPollLoop();
+}
+
+/** Check whether a saved browser state + autostart flag exist for auto-restart. */
+export function canAutoRestart(): boolean {
+  return fs.existsSync(AUTOSTART_FLAG_PATH) && fs.existsSync(BROWSER_STATE_PATH);
 }
 
 // ── Submit OTP code when Facebook requires 2-step verification ───────────────
@@ -1135,6 +1148,8 @@ export function stopBot(): void {
   }
   botState.status = "stopped";
   botState.error = null;
+  // Remove autostart flag so server won't restart bot on next reboot
+  try { fs.unlinkSync(AUTOSTART_FLAG_PATH); } catch {}
   blog("info", {}, "Bot stopped");
 }
 
